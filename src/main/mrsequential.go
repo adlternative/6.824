@@ -35,6 +35,8 @@ func main() {
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
+
+	/* 中间数据 kv 数组 */
 	intermediate := []mr.KeyValue{}
 	for _, filename := range os.Args[2:] {
 		file, err := os.Open(filename)
@@ -47,6 +49,8 @@ func main() {
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
+		// fmt.Print(kva)
+		/* 将键值对添加到 intermediate 列表 */
 		intermediate = append(intermediate, kva...)
 	}
 
@@ -55,7 +59,7 @@ func main() {
 	// intermediate data is in one place, intermediate[],
 	// rather than being partitioned into NxM buckets.
 	//
-
+	/* 中间数据按 key 排序 */
 	sort.Sort(ByKey(intermediate))
 
 	oname := "mr-out-0"
@@ -68,13 +72,16 @@ func main() {
 	i := 0
 	for i < len(intermediate) {
 		j := i + 1
+		/* [i,j) 同 key */
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
 		values := []string{}
+		/* key相同的那些项的value整合到一个 value 数组中 */
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
 		}
+		/* 调用 reduce 对 values 数组中的内容进行整合 -->output */
 		output := reducef(intermediate[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.

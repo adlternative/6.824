@@ -20,12 +20,15 @@ import "strconv"
 //
 func Map(filename string, contents string) []mr.KeyValue {
 	// function to detect word separators.
+	/* 不是字母 */
 	ff := func(r rune) bool { return !unicode.IsLetter(r) }
 
 	// split contents into an array of words.
+	/* 分割单词 */
 	words := strings.FieldsFunc(contents, ff)
 
 	kva := []mr.KeyValue{}
+	// [{aa 1} {bb 1} {cc 1} {d 1} {ee 1} {ff 1} {aa 1} {cc 1}]
 	for _, w := range words {
 		kv := mr.KeyValue{w, "1"}
 		kva = append(kva, kv)
@@ -40,5 +43,6 @@ func Map(filename string, contents string) []mr.KeyValue {
 //
 func Reduce(key string, values []string) string {
 	// return the number of occurrences of this word.
+	/* 由于这个字符串数组里面都是 "1"  所以我们只需要计算数组的长度就好 */
 	return strconv.Itoa(len(values))
 }
