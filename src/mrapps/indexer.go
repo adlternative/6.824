@@ -18,12 +18,15 @@ import "sort"
 // and the value is the file's contents. The return value should be a slice of
 // key/value pairs, each represented by a mr.KeyValue.
 func Map(document string, value string) (res []mr.KeyValue) {
+	/* 这个map就是一个set */
 	m := make(map[string]bool)
 	words := strings.FieldsFunc(value, func(x rune) bool { return !unicode.IsLetter(x) })
 	for _, w := range words {
 		m[w] = true
 	}
+	/* 对集合中每一个元素 */
 	for w := range m {
+		/* kv {"单词"，"文件名"} 倒排索引  returnlist = [{"单词"，"文件名"},{"单词"，"文件名"}]  */
 		kv := mr.KeyValue{w, document}
 		res = append(res, kv)
 	}
