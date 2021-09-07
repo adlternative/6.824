@@ -20,14 +20,17 @@ package raft
 import (
 	//	"bytes"
 	"context"
-	"log"
+	// "log"
 	"math/rand"
+	"os"
+	"runtime"
+	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
+	"github.com/google/logger"
 )
 
 //
@@ -58,14 +61,6 @@ type RaftLog struct {
 	Term    int
 }
 
-type State int
-
-const (
-	Leader State = iota
-	Candidater
-	Follower
-)
-
 //
 // A Go object implementing a single Raft peer.
 //
@@ -83,84 +78,20 @@ type Raft struct {
 	votedFor    int        /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
 	log         []*RaftLog /* 日志条目 <command,term> + index */
 
-	/* 易失性状态 */
-	commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
-	lastApplied int //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	// /* 易失性状态 */
+	// commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
+	// lastApplied int //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 
-	/* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
-	nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
-	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
+	// /* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
+	// nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
+	// matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
 	appendEntriesRpcCh chan bool
 
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
-}
-
-// return currentTerm and whether this server
-// believes it is the leader.
-func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	return rf.currentTerm, rf.state == Leader
-}
-
-//
-// save Raft's persistent state to stable storage,
-// where it can later be retrieved after a crash and restart.
-// see paper's Figure 2 for a description of what should be persistent.
-//
-func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
-}
-
-//
-// restore previously persisted state.
-//
-func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
-		return
-	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
-}
-
-//
-// A service wants to switch to snapshot.  Only do so if Raft hasn't
-// have more recent info since it communicate the snapshot on applyCh.
-//
-func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
-	// Your code here (2D).
-
-	return true
-}
-
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
+	logger               *logger.Logger
 }
 
 //
@@ -193,7 +124,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	/* 设置返回任期 */
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
-		/* 如果选举者的任期比自己的低 或者已经投票？则不投票*/
+		/* 如果选举者的任期比自己的低 */
 		reply.VoteGranted = false
 		return
 	} else if args.Term > rf.currentTerm {
@@ -204,10 +135,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 	} else {
+		/* 如果选举者的任期和自己相同 我已经投过票*/
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
+			rf.logger.Infof("[%d] have vote for [%d] so cannot vote for [%d]", rf.me, rf.votedFor, args.CandidateId)
 			reply.VoteGranted = false
 			return
 		}
+		/* 否则将票投给他 */
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 	}
@@ -248,11 +182,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
-}
-
 type AppendEntriesArgs struct {
 	Term         int       /* 领导者人的任期 */
 	LeaderId     int       /* 领导者人的 ID */
@@ -265,6 +194,11 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int  /* 投票人的任期 */
 	Success bool /*  如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了 结果为真*/
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -331,57 +265,28 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-//
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
-//
-func (rf *Raft) Kill() {
-	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
-}
-
-func (rf *Raft) killed() bool {
-	z := atomic.LoadInt32(&rf.dead)
-	return z == 1
-}
-
-func (rf *Raft) resetToFollower() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.resetToFollowerWithLock()
-}
-
-func (rf *Raft) resetToFollowerWithLock() {
-	rf.state = Follower
-	rf.votedFor = -1
-}
-
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
+
 func (rf *Raft) ticker() {
-	log.Printf("[%d] ticker: start", rf.me)
+	rf.logger.Infof("[%d] ticker: start", rf.me)
+	defer rf.logger.Infof("[%d] ticker: stop", rf.me)
+
 	timeout := time.NewTimer(rf.recvHeartBeatTimeOut)
 	defer timeout.Stop()
 
-	for rf.killed() == false {
+	for !rf.killed() {
 		select {
 		/* 如果在超时之前收到了当前领导人的请求 */
 		case <-rf.appendEntriesRpcCh:
-			log.Printf("[%d] ticker: get appendEntriesRpc, so reset the timer", rf.me)
+			rf.logger.Infof("[%d] ticker: get appendEntriesRpc, so reset the timer", rf.me)
 			// /* 如果 当前领导者发 参选者 ---> 跟随者 */
 			timeout.Reset(time.Duration(rand.Int63n(300)+300) *
 				time.Millisecond)
 			/* 关闭计时器 */
 		case <-timeout.C:
 			/* 如果计时器超时 ，执行超时回调 */
-			log.Printf("[%d] ticker: timeout", rf.me)
+			rf.logger.Infof("[%d] ticker: timeout  current goroutine num :%d", rf.me, runtime.NumGoroutine())
 			timeout.Reset(time.Duration(rand.Int63n(300)+300) *
 				time.Millisecond)
 			rf.VoteTimeOutCallBack()
@@ -390,15 +295,16 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
+	rf.logger.Infof("[%d] VoteTimeOutCallBack: start", rf.me)
+	defer rf.logger.Infof("[%d] VoteTimeOutCallBack: stop", rf.me)
+
 	var voteCnt int
 	rf.mu.Lock()
 	if rf.state == Leader {
-		log.Printf("[%d] VoteTimeOutCallBack: state is Leader", rf.me)
+		rf.logger.Infof("[%d] VoteTimeOutCallBack: It seems like me's not a follower or candidate but a Leader", rf.me)
 		rf.mu.Unlock()
 		return
 	}
-
-	log.Printf("[%d] VoteTimeOutCallBack start", rf.me)
 
 	rf.state = Candidater
 	rf.currentTerm++          /* 自增当前的任期号 */
@@ -417,8 +323,12 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 
 		go func(i int) {
 			rf.mu.Lock()
+			rf.logger.Infof("[%d] VoteTimeOutSendVote: start", rf.me)
+			defer rf.logger.Infof("[%d] VoteTimeOutSendVote: stop", rf.me)
+
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
+				rf.logger.Infof("[%d] VoteTimeOutSendVote: state changed!", rf.me)
 				rf.mu.Unlock()
 				return
 			}
@@ -433,28 +343,30 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			rf.mu.Unlock()
 			/* 也许这时候已经选举发生了改变... 但由于没有加锁(也不该加锁)，
 			我们毅然决然的发送了 */
-			log.Printf("[%d] sendRequestVote %v to [%d]", rf.me, args, i)
+			rf.logger.Infof("[%d] sendRequestVote %v to [%d]", rf.me, args, i)
 			if ok := rf.sendRequestVote(i, args, reply); !ok {
+				rf.logger.Infof("[%d] sendRequestVote to [%d]: not ok", rf.me, i)
 				return
 			}
-			log.Printf("[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
+			rf.logger.Infof("[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
 
 			rf.mu.Lock()
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
+				rf.logger.Infof("[%d] VoteTimeOutSendVote: state changed!", rf.me)
 				rf.mu.Unlock()
 				return
 			}
 			/* 拿到这张票 */
-			if reply.VoteGranted == true {
+			if reply.VoteGranted {
 				voteCnt++
-				log.Printf("[%d] get [%d] vote, now it have %d votes", rf.me, i, voteCnt)
+				rf.logger.Infof("[%d] get [%d] vote, now it have %d votes", rf.me, i, voteCnt)
 				if voteCnt >= len(rf.peers)/2+1 {
 					rf.state = Leader
 					// update nextIndex[]
 					// update matchIndex[]
 					/* 变成 leader 后定期发送心跳包 */
-					log.Printf("[%d] to be a leader!", rf.me)
+					rf.logger.Infof("[%d] to be a leader!", rf.me)
 					go rf.HeartBeatTicker()
 				}
 			} else if reply.Term > rf.currentTerm {
@@ -469,11 +381,16 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 
 /* leader 才可以定期发送心跳包 */
 func (rf *Raft) HeartBeatTicker() {
+	rf.logger.Infof("[%d] HeartBeatTicker: begin", rf.me)
+	defer rf.logger.Infof("[%d] HeartBeatTicker: end", rf.me)
+
 	HeartBeatTimeOut := time.NewTimer(rf.sendHeartBeatTimeOut) /* 100 */
-	ctx, cancel := context.WithCancel(context.Background())
 	defer HeartBeatTimeOut.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	for rf.killed() == false {
+
+	for !rf.killed() {
 		/* 如果不是领导者则应该退出 */
 		select {
 		/* 超时 */
@@ -483,37 +400,20 @@ func (rf *Raft) HeartBeatTicker() {
 			rf.HeartBeatTimeOutCallBack(ctx, cancel)
 		case <-ctx.Done():
 			/* 领导者状态发生了改变 */
-			break
+			return
 		}
 	}
-}
-
-/* （需要外界加锁）服务器状态或者任期发生变化 填入的 oldTerm == -1 || oldState == -1 表示我们不关心相关的属性 */
-func (rf *Raft) AreStateOrTermChangeWithLock(oldTerm int, oldState State) (bool, int, State) {
-	/* 状态改变  */
-	/* -1 表示 不关心 */
-	if (oldTerm != rf.currentTerm && oldTerm != -1) ||
-		(oldState != rf.state && oldState != -1) {
-		return true, rf.currentTerm, rf.state
-	}
-
-	return false, rf.currentTerm, rf.state
-}
-
-/* 服务器状态或者任期发生变化 填入的 oldTerm == -1 || oldState == -1 表示我们不关心相关的属性 */
-func (rf *Raft) AreStateOrTermChange(oldTerm int, oldState State) (bool, int, State) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	return rf.AreStateOrTermChangeWithLock(oldTerm, oldState)
 }
 
 /* 领导者服务器心跳超时的回调函数 */
 func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.CancelFunc) {
 	var heartBeatAckCnt int
-	log.Printf("[%d] HeartBeatTimeOutCallBack begin", rf.me)
+	rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: begin", rf.me)
+	defer rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: end", rf.me)
 
 	changed, oldTerm, oldState := rf.AreStateOrTermChange(-1, Leader)
 	if changed {
+		rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: state or term change", rf.me)
 		cancel()
 		return
 	}
@@ -525,12 +425,16 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			continue
 		}
 		go func(i int) {
+			rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: begin", rf.me)
+			defer rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: end", rf.me)
+
 			rf.mu.Lock()
 
 			/* 领导者状态已经发生改变 */
 			if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.mu.Unlock()
+				rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
 				cancel()
+				rf.mu.Unlock()
 				return
 			}
 
@@ -546,27 +450,26 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			rf.mu.Unlock()
 
 			if ok := rf.sendAppendEntries(i, args, reply); !ok {
-				/* nothing todo */
+				rf.logger.Infof("[%d] sendAppendEntries: not ok", rf.me)
 				return
 			}
 
 			rf.mu.Lock()
 			/* 领导者状态已经发生改变 */
 			if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.mu.Unlock()
+				rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
 				cancel()
+				rf.mu.Unlock()
 				return
 			}
-			if reply.Success == true {
+			if reply.Success {
 				heartBeatAckCnt++
-				log.Printf("[%d] get heartBeatAck from [%d], now it get %d Acks", rf.me, i, heartBeatAckCnt)
-				if heartBeatAckCnt >= len(rf.peers)/2 {
-					/* commit? */
-				}
+				rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
 			} else if reply.Term > rf.currentTerm {
 				/* 任期小 不配当领导者 */
 				rf.resetToFollowerWithLock() /* 变回 跟随者 */
 				rf.currentTerm = reply.Term  /* 更新任期 */
+				rf.logger.Infof("[%d] LEADER --> FOLLOWER term = %d", rf.me, rf.currentTerm)
 			}
 			rf.mu.Unlock()
 		}(i)
@@ -599,6 +502,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
+
+	lf, err := os.OpenFile(strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
+	if err != nil {
+		logger.Fatalf("Failed to open log file: %v", err)
+	}
+	rf.logger = logger.Init("raftlog", false, true, lf)
+
 	go rf.ticker()
 
 	return rf
