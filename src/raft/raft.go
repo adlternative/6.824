@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	//	"6.824/labgob"
@@ -92,6 +93,8 @@ type Raft struct {
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
 	logger               *logger.Logger
+
+	routineCnt int32 // 主动开的 go协程数量统计
 }
 
 //
@@ -119,6 +122,9 @@ type RequestVoteReply struct {
 //
 /* 接收的服务器上处理 RequestVoteRPC  */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	atomic.AddInt32(&rf.routineCnt, 1)
+	defer atomic.AddInt32(&rf.routineCnt, -1)
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 设置返回任期 */
@@ -202,6 +208,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	atomic.AddInt32(&rf.routineCnt, 1)
+	defer atomic.AddInt32(&rf.routineCnt, -1)
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -269,6 +278,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // heartsbeats recently.
 
 func (rf *Raft) ticker() {
+	atomic.AddInt32(&rf.routineCnt, 1)
+	defer atomic.AddInt32(&rf.routineCnt, -1)
+
 	rf.logger.Infof("[%d] ticker: start", rf.me)
 	defer rf.logger.Infof("[%d] ticker: stop", rf.me)
 
@@ -286,10 +298,10 @@ func (rf *Raft) ticker() {
 			/* 关闭计时器 */
 		case <-timeout.C:
 			/* 如果计时器超时 ，执行超时回调 */
-			rf.logger.Infof("[%d] ticker: timeout  current goroutine num :%d", rf.me, runtime.NumGoroutine())
+			rf.logger.Infof("[%d] ticker: timeout ", rf.me)
 			timeout.Reset(time.Duration(rand.Int63n(300)+300) *
 				time.Millisecond)
-			rf.VoteTimeOutCallBack()
+			go rf.VoteTimeOutCallBack()
 		}
 	}
 }
@@ -322,6 +334,9 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 		}
 
 		go func(i int) {
+			atomic.AddInt32(&rf.routineCnt, 1)
+			defer atomic.AddInt32(&rf.routineCnt, -1)
+
 			rf.mu.Lock()
 			rf.logger.Infof("[%d] VoteTimeOutSendVote: start", rf.me)
 			defer rf.logger.Infof("[%d] VoteTimeOutSendVote: stop", rf.me)
@@ -381,6 +396,9 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 
 /* leader 才可以定期发送心跳包 */
 func (rf *Raft) HeartBeatTicker() {
+	atomic.AddInt32(&rf.routineCnt, 1)
+	defer atomic.AddInt32(&rf.routineCnt, -1)
+
 	rf.logger.Infof("[%d] HeartBeatTicker: begin", rf.me)
 	defer rf.logger.Infof("[%d] HeartBeatTicker: end", rf.me)
 
@@ -397,7 +415,7 @@ func (rf *Raft) HeartBeatTicker() {
 		case <-HeartBeatTimeOut.C:
 			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
 			/* 发送心跳 */
-			rf.HeartBeatTimeOutCallBack(ctx, cancel)
+			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
 		case <-ctx.Done():
 			/* 领导者状态发生了改变 */
 			return
@@ -425,6 +443,9 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			continue
 		}
 		go func(i int) {
+			atomic.AddInt32(&rf.routineCnt, 1)
+			defer atomic.AddInt32(&rf.routineCnt, -1)
+
 			rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: begin", rf.me)
 			defer rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: end", rf.me)
 
@@ -510,6 +531,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logger = logger.Init("raftlog", false, true, lf)
 
 	go rf.ticker()
-
+	go rf.RoutineCntDebug()
 	return rf
+}
+
+func (rf *Raft) RoutineCntDebug() {
+	for {
+		time.Sleep(time.Second)
+		rf.logger.Infof("[%d] go rountine count: %d, total: %d", rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
+	}
 }
