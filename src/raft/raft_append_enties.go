@@ -49,7 +49,6 @@ func (rf *Raft) HeartBeatTicker() {
 	}
 }
 
-
 /* 领导者服务器心跳超时的回调函数 */
 func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.CancelFunc) {
 	var heartBeatAckCnt int
@@ -97,9 +96,11 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			}
 			rf.mu.Unlock()
 
-			if ok := rf.sendAppendEntries(i, args, reply); !ok {
+			for ok := rf.sendAppendEntries(i, args, reply); !ok; ok = rf.sendAppendEntries(i, args, reply) {
+				if rf.killed() {
+					return
+				}
 				rf.logger.Infof("[%d] sendAppendEntries: not ok", rf.me)
-				return
 			}
 
 			rf.mu.Lock()

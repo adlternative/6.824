@@ -111,9 +111,11 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			/* 也许这时候已经选举发生了改变... 但由于没有加锁(也不该加锁)，
 			我们毅然决然的发送了 */
 			rf.logger.Infof("[%d] sendRequestVote %v to [%d]", rf.me, args, i)
-			if ok := rf.sendRequestVote(i, args, reply); !ok {
+			for ok := rf.sendRequestVote(i, args, reply); !ok; ok = rf.sendRequestVote(i, args, reply) {
+				if rf.killed() {
+					return
+				}
 				rf.logger.Infof("[%d] sendRequestVote to [%d]: not ok", rf.me, i)
-				return
 			}
 			rf.logger.Infof("[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
 
