@@ -28,11 +28,13 @@ func (rf *Raft) HeartBeatTicker() {
 	rf.logger.Infof("[%d] HeartBeatTicker: begin", rf.me)
 	defer rf.logger.Infof("[%d] HeartBeatTicker: end", rf.me)
 
-	HeartBeatTimeOut := time.NewTimer(rf.sendHeartBeatTimeOut) /* 100 */
-	defer HeartBeatTimeOut.Stop()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	/* 立即发送一波 */
+	go rf.HeartBeatTimeOutCallBack(ctx, cancel)
+
+	HeartBeatTimeOut := time.NewTimer(rf.sendHeartBeatTimeOut) /* 100 */
+	defer HeartBeatTimeOut.Stop()
 
 	for !rf.killed() {
 		/* 如果不是领导者则应该退出 */
