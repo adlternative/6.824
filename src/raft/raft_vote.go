@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	_ "log"
 	"math/rand"
 	"sync/atomic"
@@ -136,9 +137,9 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 					rf.TurnToLeaderWithLock()
 				}
 			} else if reply.Term > rf.currentTerm {
-				/* 任期小 不配当领导者 */
-				rf.ResetToFollowerWithLock() /* 变回 跟随者 */
-				rf.currentTerm = reply.Term  /* 更新任期 */
+				/* 任期小 不配当领导者 变回 跟随者 */
+				rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期 %d 不配当领导者", rf.me, rf.currentTerm, i, reply.Term))
+				rf.currentTerm = reply.Term /* 更新任期 */
 			}
 			rf.mu.Unlock()
 		}(i)
@@ -171,14 +172,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	} else /*  if args.Term > rf.currentTerm */ {
 		/* 如果选举者的任期比自己的高，更新自己任期 */
-		rf.ResetToFollowerWithLock() /* 变回 跟随者 */
+		rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期%d 不配当领导者", rf.me, rf.currentTerm, args.CandidateId, args.Term))
 		rf.currentTerm = args.Term
 		/* 先别投票 （得对方的 日志是否够新）*/
 	}
 
-	/* 候选人的日志没有和自己一样新	 */
-	if args.LastLogIndex < len(rf.log)-1 ||
-		args.LastLogTerm < rf.log[len(rf.log)-1].Term {
+	/* 候选人的日志没有和自己一样新	 先最后一个项的任期 再比较长度 */
+	if args.LastLogTerm < rf.log[len(rf.log)-1].Term ||
+		(args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex < len(rf.log)-1) {
 		rf.logger.Infof("[%d] log is old than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
 		// rf.logger.Infof("[%d] args.LastLogIndex =%d, args.LastLogTerm =%d, len(rf.log) =%d  rf.log[len(rf.log)-1].Term = %d",
 		// 	rf.me, args.LastLogIndex, args.LastLogTerm, len(rf.log), rf.log[len(rf.log)-1].Term)

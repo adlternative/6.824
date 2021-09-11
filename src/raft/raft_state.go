@@ -37,14 +37,14 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
-func (rf *Raft) ResetToFollower() {
+func (rf *Raft) ResetToFollower(reason string) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.ResetToFollowerWithLock()
+	rf.ResetToFollowerWithLock(reason)
 }
 
-func (rf *Raft) ResetToFollowerWithLock() {
-	log.Printf("[%d] ResetToFollower with log: %v, term: %v", rf.me, rf.log, rf.currentTerm)
+func (rf *Raft) ResetToFollowerWithLock(reason string) {
+	log.Printf("[%d] ResetToFollower with log: %v, term: %v reason: %s", rf.me, rf.log, rf.currentTerm, reason)
 	switch rf.state {
 	case Leader:
 		rf.logger.Infof("[%d]  LEADER --> FOLLOWER!", rf.me)

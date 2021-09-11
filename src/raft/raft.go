@@ -22,6 +22,7 @@ import (
 	// "context"
 	// "log"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"runtime"
@@ -84,9 +85,9 @@ type Raft struct {
 	state State // 不同的服务器状态
 
 	/* 持久性状态 */
-	currentTerm int        // 服务器已知最新的任期
-	votedFor    int        /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
-	log         []*RaftLog /* 日志条目 <command,term> + index */
+	currentTerm int       // 服务器已知最新的任期
+	votedFor    int       /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
+	log         []RaftLog /* 日志条目 <command,term> + index */
 
 	/* 易失性状态 */
 	commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
@@ -127,7 +128,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.state = Follower
 	rf.votedFor = -1
-	rf.log = append(rf.log, &RaftLog{})
+	rf.log = append(rf.log, RaftLog{})
 	rf.appendEntriesRpcCh = make(chan bool)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(300)+300) * time.Millisecond
@@ -169,18 +170,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := false
-
 	if !rf.killed() {
 		rf.mu.Lock()
 		/* 向当前服务器添加日志项 */
 		term = rf.currentTerm
 		isLeader = rf.state == Leader
 		if isLeader {
-			rf.log = append(rf.log, &RaftLog{command, term})
+			rf.log = append(rf.log, RaftLog{command, term})
 			rf.logger.Info(rf.log)
 			index = len(rf.log) - 1
+			log.Printf("[%d] start command %v in index(%d)", rf.me, command, index)
+			rf.matchIndex[rf.me] = index
 		}
-		rf.matchIndex[rf.me] = index
 		rf.mu.Unlock()
 	}
 	return index, term, isLeader
