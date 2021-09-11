@@ -2,17 +2,18 @@ package raft
 
 import (
 	"context"
+	"log"
 	"sync/atomic"
 	"time"
 )
 
 type AppendEntriesArgs struct {
-	Term         int       /* 领导者人的任期 */
-	LeaderId     int       /* 领导者人的 ID */
-	PrevLogIndex int       /* 领导者人发送的新日志的前一条日志索引 */
-	PrevLogTerm  int       /* 领导者人发送的新日志的前一条日志任期 */
-	Entries      []RaftLog /* 领导者人发送的新日志 */
-	LeaderCommit int       /* 领导者人的最后一条日志的索引 */
+	Term         int        /* 领导者人的任期 */
+	LeaderId     int        /* 领导者人的 ID */
+	PrevLogIndex int        /* 领导者人发送的新日志的前一条日志索引 */
+	PrevLogTerm  int        /* 领导者人发送的新日志的前一条日志任期 */
+	Entries      []*RaftLog /* 领导者人发送的新日志 */
+	LeaderCommit int        /* 领导者人的最后一条日志的索引 */
 }
 
 type AppendEntriesReply struct {
@@ -87,42 +88,75 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 				return
 			}
 
-			reply := &AppendEntriesReply{}
-			args := &AppendEntriesArgs{
-				Term:     rf.currentTerm,
-				LeaderId: rf.me,
-				// PrevLogIndex: ,
-				// PrevLogTerm: ,
-				// Entries: ,
-				// LeaderCommit: ,
-			}
-			rf.mu.Unlock()
+			for !rf.killed() {
+				reply := &AppendEntriesReply{}
+				args := &AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					PrevLogIndex: rf.nextIndex[i] - 1,
+					PrevLogTerm:  rf.log[rf.nextIndex[i]-1].Term,
+					Entries:      rf.log[rf.nextIndex[i]:],
+					LeaderCommit: rf.commitIndex,
+				}
+				rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: args: %+v", rf.me, args)
+				rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: nextIndex[i]: %+v rf.log=%v",
+					rf.me, rf.nextIndex[i], rf.log)
+				rf.mu.Unlock()
 
-			for ok := rf.sendAppendEntries(i, args, reply); !ok; ok = rf.sendAppendEntries(i, args, reply) {
-				if rf.killed() {
+				/* [TODO] 出错多少次退出？ */
+				for ok := rf.sendAppendEntries(i, args, reply); !rf.killed() && !ok; ok = rf.sendAppendEntries(i, args, reply) {
+					rf.logger.Infof("[%d] sendAppendEntries to [%d]: not ok", rf.me, i)
+				}
+
+				rf.mu.Lock()
+				/* 领导者状态已经发生改变 */
+				if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
+					rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
+					cancel()
+					rf.mu.Unlock()
 					return
 				}
-				rf.logger.Infof("[%d] sendAppendEntries: not ok", rf.me)
-			}
+				if reply.Success {
+					heartBeatAckCnt++
+					rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
+					/* 更新 matchIndex AND nextIndex */
+					rf.matchIndex[i] = rf.nextIndex[i] + len(args.Entries) - 1
+					rf.nextIndex[i] = rf.matchIndex[i] + 1
 
-			rf.mu.Lock()
-			/* 领导者状态已经发生改变 */
-			if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
-				cancel()
-				rf.mu.Unlock()
-				return
+					matchCnt := 0
+					for j := 0; j < len(rf.matchIndex); j++ {
+						if rf.matchIndex[j] == rf.matchIndex[i] {
+							matchCnt++
+						}
+						/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
+						if matchCnt == len(rf.matchIndex)/2+1 &&
+							rf.matchIndex[i] > rf.commitIndex {
+							// updateCommitIndex()
+							rf.commitIndex = rf.matchIndex[i]
+							if rf.commitIndex > rf.lastApplied {
+								go rf.ApplyCommittedMsgs()
+							}
+							break
+						}
+					}
+					// }
+					rf.mu.Unlock()
+					return
+				} else if reply.Term > rf.currentTerm {
+					/* 任期小 不配当领导者 */
+					rf.ResetToFollowerWithLock() /* 变回 跟随者 */
+					rf.currentTerm = reply.Term  /* 更新任期 */
+					rf.logger.Infof("[%d] term = %d", rf.me, rf.currentTerm)
+					rf.mu.Unlock()
+					return
+				} else {
+					/* 降低 nextIndex 并重试 */
+					if rf.nextIndex[i] > 1 {
+						rf.nextIndex[i]--
+					}
+					/* continue */
+				}
 			}
-			if reply.Success {
-				heartBeatAckCnt++
-				rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
-			} else if reply.Term > rf.currentTerm {
-				/* 任期小 不配当领导者 */
-				rf.resetToFollowerWithLock() /* 变回 跟随者 */
-				rf.currentTerm = reply.Term  /* 更新任期 */
-				rf.logger.Infof("[%d] LEADER --> FOLLOWER term = %d", rf.me, rf.currentTerm)
-			}
-			rf.mu.Unlock()
 		}(i)
 	}
 }
@@ -147,30 +181,61 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else if args.Term > rf.currentTerm {
 		/* 如果领导者的任期比自己的高，更新自己任期 */
-		rf.resetToFollowerWithLock() /* 变回 跟随者 */
+		rf.ResetToFollowerWithLock() /* 变回 跟随者 */
 		rf.currentTerm = args.Term
 	} else {
 		if rf.state == Candidater {
 			/* 选举人收到了新 leader 的 appendEntriesRpc */
-			rf.resetToFollowerWithLock() /* 变回 跟随者 */
+			rf.ResetToFollowerWithLock() /* 变回 跟随者 */
 		}
 	}
-	// if args.PrevLogIndex > rf.log.LastIndex() {
-	// 	reply.Success = false
-	// } else if args.PrevLogIndex == rf.log.LastIndex() {
-	// 	if args.PrevLogTerm != rf.log.LastTerm() {
-	// 		reply.Success = false
-	// 	}
-	// } else {
-	// 	if args.PrevLogTerm != rf.log.Get(args.PrevLogIndex).Term {
-	// 		reply.Success = false
-	// 	}
-	// }
-	// if reply.Success {
-	// 	rf.log.Append(args.Entries)
-	// 	rf.commitIndex = Min(args.LeaderCommit, rf.log.LastIndex())
-	// 	rf.lastApplied = rf.commitIndex
-	// }
-	rf.appendEntriesRpcCh <- true /* 重置等待选举的超时定时器 */
-	reply.Success = true
+
+	/* ASSERT( rf.state == FOLLOWER) */
+
+	/* PrevLogIndex > 最后一条日志的坐标 */
+	if args.PrevLogIndex > len(rf.log)-1 ||
+		args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
+		reply.Success = false
+	} else {
+		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
+		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
+
+		/* 去除冲突项 */
+		rf.log = rf.log[:args.PrevLogIndex+1]
+		/* 后添新项 */
+		rf.log = append(rf.log, args.Entries...)
+		rf.logger.Infof("AppendEntries args: %#v", args)
+		rf.logger.Infof("len(log): %d, rf.log: %v\n", len(rf.log), rf.log)
+		/* 更新 commitIndex  */
+		rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
+
+		/* 还应该 log apply to state machine */
+		if rf.commitIndex > rf.lastApplied {
+			go rf.ApplyCommittedMsgs()
+		}
+
+		rf.logger.Infof("[%d] AppendEntries OK!", rf.me)
+		rf.appendEntriesRpcCh <- true /* 重置等待选举的超时定时器 */
+		reply.Success = true
+	}
+}
+
+/* 更新 commitIndex */
+func (rf *Raft) ApplyCommittedMsgs() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// log.Print(rf.commitIndex, rf.lastApplied+1, len(rf.log))
+
+	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+		rf.lastApplied = rf.commitIndex
+		log.Printf("[%d] ApplyCommittedMsgs %d: %v", rf.me, i, rf.log[i])
+
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[i].Command,
+			CommandIndex: i,
+		}
+		log.Printf("[%d] ApplyCommittedMsgs %d ok", rf.me, i)
+	}
+	rf.lastApplied = rf.commitIndex
 }

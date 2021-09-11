@@ -1,6 +1,6 @@
 package raft
 
-import "sync/atomic"
+import "log"
 
 type State int
 
@@ -37,34 +37,42 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
-//
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
-//
-func (rf *Raft) Kill() {
-	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
-}
-
-func (rf *Raft) killed() bool {
-	z := atomic.LoadInt32(&rf.dead)
-	return z == 1
-}
-
-func (rf *Raft) resetToFollower() {
+func (rf *Raft) ResetToFollower() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.resetToFollowerWithLock()
+	rf.ResetToFollowerWithLock()
 }
 
-func (rf *Raft) resetToFollowerWithLock() {
+func (rf *Raft) ResetToFollowerWithLock() {
+	log.Printf("[%d] ResetToFollower with log: %v, term: %v", rf.me, rf.log, rf.currentTerm)
+	switch rf.state {
+	case Leader:
+		rf.logger.Infof("[%d]  LEADER --> FOLLOWER!", rf.me)
+	case Candidater:
+		rf.logger.Infof("[%d]  CANDIDATER --> FOLLOWER!", rf.me)
+	case Follower:
+		rf.logger.Infof("[%d]  FOLLLOWER --> FOLLOWER!", rf.me)
+	default:
+		rf.logger.Fatalf("[%d]  UNKNOWN --> FOLLOWER!", rf.me)
+	}
 	rf.state = Follower
 	rf.votedFor = -1
+}
+
+func (rf *Raft) TurnToLeaderWithLock() {
+	/* assert rf.state = Candidater */
+	rf.logger.Infof("[%d] CANDIDATER --> LEADER!", rf.me)
+	log.Printf("[%d] TurnToLeaderWithLock with log: %v term: %v", rf.me, rf.log, rf.currentTerm)
+
+	rf.state = Leader
+	// update nextIndex[]
+	for i := 0; i < len(rf.peers); i++ {
+		rf.nextIndex[i] = len(rf.log)
+	}
+	// update matchIndex[]
+	for i := 0; i < len(rf.peers); i++ {
+		rf.matchIndex[i] = -1
+	}
+	/* 变成 leader 后定期发送心跳包 */
+	go rf.HeartBeatTicker()
 }

@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	// "context"
 	// "log"
+	"fmt"
 	"math/rand"
 	"os"
 	"runtime"
@@ -62,6 +63,14 @@ type RaftLog struct {
 	Term    int
 }
 
+func (log *RaftLog) String() string {
+	val, ok := log.Command.(int)
+	if ok {
+		return fmt.Sprintf("{%d, %d}", val, log.Term)
+	}
+	return ""
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -79,16 +88,17 @@ type Raft struct {
 	votedFor    int        /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
 	log         []*RaftLog /* 日志条目 <command,term> + index */
 
-	// /* 易失性状态 */
-	// commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
-	// lastApplied int //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	/* 易失性状态 */
+	commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
+	lastApplied int //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 
-	// /* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
-	// nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
-	// matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
+	/* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
+	nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
+	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
 	appendEntriesRpcCh chan bool
+	applyCh            chan ApplyMsg // 用于提交日志条目
 
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
@@ -110,11 +120,13 @@ type Raft struct {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	/* raft state init */
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.resetToFollower() /* 变跟随者 (设置 voteFor = -1) */
+	rf.state = Follower
+	rf.votedFor = -1
 	rf.log = append(rf.log, &RaftLog{})
 	rf.appendEntriesRpcCh = make(chan bool)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
@@ -122,14 +134,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	// start ticker goroutine to start elections
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
+	rf.applyCh = applyCh
 
+	/* log for debug */
 	lf, err := os.OpenFile(strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
 	if err != nil {
 		logger.Fatalf("Failed to open log file: %v", err)
 	}
 	rf.logger = logger.Init("raftlog", false, true, lf)
 
+	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.RoutineCntDebug()
 	return rf
@@ -152,10 +168,21 @@ func Make(peers []*labrpc.ClientEnd, me int,
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := false
 
-	// Your code here (2B).
-
+	if !rf.killed() {
+		rf.mu.Lock()
+		/* 向当前服务器添加日志项 */
+		term = rf.currentTerm
+		isLeader = rf.state == Leader
+		if isLeader {
+			rf.log = append(rf.log, &RaftLog{command, term})
+			rf.logger.Info(rf.log)
+			index = len(rf.log) - 1
+		}
+		rf.matchIndex[rf.me] = index
+		rf.mu.Unlock()
+	}
 	return index, term, isLeader
 }
 
@@ -164,4 +191,25 @@ func (rf *Raft) RoutineCntDebug() {
 		time.Sleep(time.Second)
 		rf.logger.Infof("[%d] go rountine count: %d, total: %d", rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
 	}
+}
+
+//
+// the tester doesn't halt goroutines created by Raft after each test,
+// but it does call the Kill() method. your code can use killed() to
+// check whether Kill() has been called. the use of atomic avoids the
+// need for a lock.
+//
+// the issue is that long-running goroutines use memory and may chew
+// up CPU time, perhaps causing later tests to fail and generating
+// confusing debug output. any goroutine with a long-running loop
+// should call killed() to check whether it should stop.
+//
+func (rf *Raft) Kill() {
+	atomic.StoreInt32(&rf.dead, 1)
+	// Your code here, if desired.
+}
+
+func (rf *Raft) killed() bool {
+	z := atomic.LoadInt32(&rf.dead)
+	return z == 1
 }

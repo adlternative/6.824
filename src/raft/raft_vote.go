@@ -1,6 +1,7 @@
 package raft
 
 import (
+	_ "log"
 	"math/rand"
 	"sync/atomic"
 	"time"
@@ -65,13 +66,14 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 	var voteCnt int
 	rf.mu.Lock()
 	if rf.state == Leader {
-		rf.logger.Infof("[%d] VoteTimeOutCallBack: It seems like me's not a follower or candidate but a Leader", rf.me)
+		rf.logger.Infof("[%d] VoteTimeOutCallBack: It seems like [%d] is not a follower or candidater but a leader", rf.me, rf.me)
 		rf.mu.Unlock()
 		return
 	}
 
 	rf.state = Candidater
-	rf.currentTerm++          /* 自增当前的任期号 */
+	rf.currentTerm++ /* 自增当前的任期号 */
+	// rf.logger.Infof("[%d] currentTerm: %d", rf.me, rf.currentTerm)
 	oldTerm := rf.currentTerm /* 记录当前任期号 */
 	oldState := rf.state
 
@@ -130,17 +132,12 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			if reply.VoteGranted {
 				voteCnt++
 				rf.logger.Infof("[%d] get [%d] vote, now it have %d votes", rf.me, i, voteCnt)
-				if voteCnt >= len(rf.peers)/2+1 {
-					rf.state = Leader
-					// update nextIndex[]
-					// update matchIndex[]
-					/* 变成 leader 后定期发送心跳包 */
-					rf.logger.Infof("[%d] to be a leader!", rf.me)
-					go rf.HeartBeatTicker()
+				if voteCnt == len(rf.peers)/2+1 {
+					rf.TurnToLeaderWithLock()
 				}
 			} else if reply.Term > rf.currentTerm {
 				/* 任期小 不配当领导者 */
-				rf.resetToFollowerWithLock() /* 变回 跟随者 */
+				rf.ResetToFollowerWithLock() /* 变回 跟随者 */
 				rf.currentTerm = reply.Term  /* 更新任期 */
 			}
 			rf.mu.Unlock()
@@ -162,27 +159,36 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		/* 如果选举者的任期比自己的低 */
+		rf.logger.Infof("[%d] term is less than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
 		reply.VoteGranted = false
 		return
-	} else if args.Term > rf.currentTerm {
-		/* 如果选举者的任期比自己的高，更新自己任期 */
-		rf.resetToFollowerWithLock() /* 变回 跟随者 */
-		rf.currentTerm = args.Term
-
-		rf.votedFor = args.CandidateId
-		reply.VoteGranted = true
-	} else {
+	} else if args.Term == rf.currentTerm {
 		/* 如果选举者的任期和自己相同 我已经投过票*/
 		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
 			rf.logger.Infof("[%d] have vote for [%d] so cannot vote for [%d]", rf.me, rf.votedFor, args.CandidateId)
 			reply.VoteGranted = false
 			return
 		}
-		/* 否则将票投给他 */
-		rf.votedFor = args.CandidateId
-		reply.VoteGranted = true
+	} else /*  if args.Term > rf.currentTerm */ {
+		/* 如果选举者的任期比自己的高，更新自己任期 */
+		rf.ResetToFollowerWithLock() /* 变回 跟随者 */
+		rf.currentTerm = args.Term
+		/* 先别投票 （得对方的 日志是否够新）*/
 	}
 
+	/* 候选人的日志没有和自己一样新	 */
+	if args.LastLogIndex < len(rf.log)-1 ||
+		args.LastLogTerm < rf.log[len(rf.log)-1].Term {
+		rf.logger.Infof("[%d] log is old than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
+		// rf.logger.Infof("[%d] args.LastLogIndex =%d, args.LastLogTerm =%d, len(rf.log) =%d  rf.log[len(rf.log)-1].Term = %d",
+		// 	rf.me, args.LastLogIndex, args.LastLogTerm, len(rf.log), rf.log[len(rf.log)-1].Term)
+		reply.VoteGranted = false
+		return
+	}
+
+	/* 否则将票投给他 */
+	rf.votedFor = args.CandidateId
+	reply.VoteGranted = true
 }
 
 //
