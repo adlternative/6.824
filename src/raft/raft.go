@@ -22,7 +22,7 @@ import (
 	// "context"
 	// "log"
 	"fmt"
-	"log"
+	// "log"
 	"math/rand"
 	"os"
 	"runtime"
@@ -179,7 +179,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.log = append(rf.log, RaftLog{command, term})
 			rf.logger.Info(rf.log)
 			index = len(rf.log) - 1
-			log.Printf("[%d] start command %v in index(%d)", rf.me, command, index)
+			// log.Printf("[%d] start command %v in index(%d)", rf.me, command, index)
 			rf.matchIndex[rf.me] = index
 		}
 		rf.mu.Unlock()

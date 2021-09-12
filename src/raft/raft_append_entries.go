@@ -3,7 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
-	"log"
+	// "log"
 	"sync/atomic"
 	"time"
 )
@@ -102,12 +102,12 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					LeaderId:     rf.me,
 					PrevLogIndex: rf.nextIndex[i] - 1,
 					PrevLogTerm:  rf.log[rf.nextIndex[i]-1].Term,
-					// Entries:      rf.log[rf.nextIndex[i]:],
 					LeaderCommit: rf.commitIndex,
 				}
 
 				if rf.nextIndex[i] < len(rf.log) {
-					args.Entries = rf.log[rf.nextIndex[i]:]
+					args.Entries = make([]RaftLog, len(rf.log[rf.nextIndex[i]:]))
+					copy(args.Entries, rf.log[rf.nextIndex[i]:])
 				}
 
 				// rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: args: %+v", rf.me, args)
@@ -140,11 +140,11 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 
 						// log.Printf("[%d] len(log)=%d", rf.me, len(rf.log))
 						// log.Printf("[%d] HeartBeatTimeOutSendAppendEntriesRPC before: matchIndex: %+v\n nextIndex: %+v\n", rf.me, rf.matchIndex, rf.nextIndex)
-						log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
+						// log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
 						rf.matchIndex[i] = rf.nextIndex[i] + len(args.Entries) - 1
-						log.Printf("now entrylen: %d", len(args.Entries))
+						// log.Printf("now entrylen: %d", len(args.Entries))
 						rf.nextIndex[i] = rf.matchIndex[i] + 1
-						log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
+						// log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
 						// log.Printf("[%d] HeartBeatTimeOutSendAppendEntriesRPC after: matchIndex: %+v\n nextIndex: %+v\n", rf.me, rf.matchIndex, rf.nextIndex)
 						matchCnt := 0
 						for j := 0; j < len(rf.matchIndex); j++ {
@@ -253,14 +253,14 @@ func (rf *Raft) ApplyCommittedMsgs() {
 	// log.Print(rf.commitIndex, rf.lastApplied+1, len(rf.log))
 
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		log.Printf("[%d] ApplyCommittedMsgs %d: %v", rf.me, i, rf.log[i])
+		// log.Printf("[%d] ApplyCommittedMsgs %d: %v", rf.me, i, rf.log[i])
 
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[i].Command,
 			CommandIndex: i,
 		}
-		log.Printf("[%d] ApplyCommittedMsgs %d ok", rf.me, i)
+		// log.Printf("[%d] ApplyCommittedMsgs %d ok", rf.me, i)
 	}
 	rf.lastApplied = rf.commitIndex
 }
