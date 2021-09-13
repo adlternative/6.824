@@ -22,6 +22,7 @@ import (
 	// "context"
 	// "log"
 	"fmt"
+	"log"
 	// "log"
 	"math/rand"
 	"os"
@@ -98,8 +99,8 @@ type Raft struct {
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	appendEntriesRpcCh chan bool
-	applyCh            chan ApplyMsg // 用于提交日志条目
+	resetTimerCh chan bool
+	applyCh      chan ApplyMsg // 用于提交日志条目
 
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
@@ -129,7 +130,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.state = Follower
 	rf.votedFor = -1
 	rf.log = append(rf.log, RaftLog{})
-	rf.appendEntriesRpcCh = make(chan bool)
+	rf.resetTimerCh = make(chan bool)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(300)+300) * time.Millisecond
 	// initialize from state persisted before a crash
@@ -140,7 +141,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 
 	/* log for debug */
-	lf, err := os.OpenFile(strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
+	lf, err := os.OpenFile(time.Now().Format(time.RFC3339)+strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
 	if err != nil {
 		logger.Fatalf("Failed to open log file: %v", err)
 	}
@@ -179,7 +180,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.log = append(rf.log, RaftLog{command, term})
 			rf.logger.Info(rf.log)
 			index = len(rf.log) - 1
-			// log.Printf("[%d] start command %v in index(%d)", rf.me, command, index)
+			log.Printf("T[%d] S[%d] start command %v in index(%d)", rf.currentTerm, rf.me, command, index)
 			rf.matchIndex[rf.me] = index
 		}
 		rf.mu.Unlock()

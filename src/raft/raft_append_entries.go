@@ -3,7 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
-	// "log"
+	"log"
 	"sync/atomic"
 	"time"
 )
@@ -18,8 +18,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  /* 投票人的任期 */
-	Success bool /*  如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了 结果为真*/
+	Term       int  /* 投票人的任期 */
+	Success    bool /*  如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了 结果为真*/
+	MatchIndex int  /* 跟随者的最后日志索引 */
 }
 
 /* leader 才可以定期发送心跳包 */
@@ -33,7 +34,7 @@ func (rf *Raft) HeartBeatTicker() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	/* 立即发送一波 */
-	go rf.HeartBeatTimeOutCallBack(ctx, cancel)
+	rf.HeartBeatTimeOutCallBack(ctx, cancel)
 
 	HeartBeatTimeOut := time.NewTimer(rf.sendHeartBeatTimeOut) /* 100 */
 	defer HeartBeatTimeOut.Stop()
@@ -43,8 +44,8 @@ func (rf *Raft) HeartBeatTicker() {
 		select {
 		/* 超时 */
 		case <-HeartBeatTimeOut.C:
-			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
 			/* 发送心跳 */
+			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
 			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
 		case <-ctx.Done():
 			/* 领导者状态发生了改变 */
@@ -90,36 +91,25 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					return
 				}
 
-				// log.Printf("[%d] HeartBeatTimeOutSendAppendEntriesRPC: nextIndex[%d]: %+v\n",
-				// rf.me, i, rf.nextIndex[i])
-				// log.Printf("[%d] is a leader with nextindex: %v", rf.me, rf.nextIndex)
-				// entrylen := len(rf.log[rf.nextIndex[i]:])
-				// loglen := len(rf.log)
-				// prelogindex := rf.nextIndex[i] - 1
 				reply := &AppendEntriesReply{}
 				args := &AppendEntriesArgs{
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
+					LeaderCommit: rf.commitIndex,
 					PrevLogIndex: rf.nextIndex[i] - 1,
 					PrevLogTerm:  rf.log[rf.nextIndex[i]-1].Term,
-					LeaderCommit: rf.commitIndex,
 				}
 
-				if rf.nextIndex[i] < len(rf.log) {
-					args.Entries = make([]RaftLog, len(rf.log[rf.nextIndex[i]:]))
-					copy(args.Entries, rf.log[rf.nextIndex[i]:])
-				}
+				args.Entries = make([]RaftLog, len(rf.log[rf.nextIndex[i]:]))
+				copy(args.Entries, rf.log[rf.nextIndex[i]:])
 
-				// rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: args: %+v", rf.me, args)
-				// log.Printf("[%d] nextIndex[%d]: %+v len(log)=%d len(entries)=%d entrylen=%d, loglen=%d, prelogindex =%d",
-				// 	rf.me, i, rf.nextIndex[i], len(rf.log), len(rf.log[rf.nextIndex[i]:]), entrylen, loglen, prelogindex)
 				rf.mu.Unlock()
 
 				/* ==========UNLOCK SPACE========= */
 				/* [TODO] 出错多少次退出？ */
 				if ok := rf.sendAppendEntries(i, args, reply); !ok {
 					rf.logger.Infof("[%d] sendAppendEntries to [%d]: not ok", rf.me, i)
-					continue
+					return
 				}
 				/* =================== */
 
@@ -135,32 +125,26 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					heartBeatAckCnt++
 					rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
 					/* 更新 matchIndex AND nextIndex */
-					if rf.nextIndex[i]+len(args.Entries) <= len(rf.log) {
-						// log.Printf("len(args.Entries)=%d entrylen=%d loglen=%d prelogindex=%d", len(args.Entries), entrylen, loglen, prelogindex)
-
-						// log.Printf("[%d] len(log)=%d", rf.me, len(rf.log))
-						// log.Printf("[%d] HeartBeatTimeOutSendAppendEntriesRPC before: matchIndex: %+v\n nextIndex: %+v\n", rf.me, rf.matchIndex, rf.nextIndex)
-						// log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
-						rf.matchIndex[i] = rf.nextIndex[i] + len(args.Entries) - 1
-						// log.Printf("now entrylen: %d", len(args.Entries))
-						rf.nextIndex[i] = rf.matchIndex[i] + 1
-						// log.Printf("[%d]before rf.nextIndex[%d]=%d", rf.me, i, rf.nextIndex)
-						// log.Printf("[%d] HeartBeatTimeOutSendAppendEntriesRPC after: matchIndex: %+v\n nextIndex: %+v\n", rf.me, rf.matchIndex, rf.nextIndex)
-						matchCnt := 0
-						for j := 0; j < len(rf.matchIndex); j++ {
-							if rf.matchIndex[j] == rf.matchIndex[i] {
-								matchCnt++
+					rf.matchIndex[i] = reply.MatchIndex
+					rf.nextIndex[i] = rf.matchIndex[i] + 1
+					if rf.nextIndex[i] > len(rf.log) { //debug
+						rf.mu.Unlock()
+						log.Fatalf("rf.nextIndex[i]=%d len(rf.log)=%d", rf.nextIndex[i], len(rf.log))
+					}
+					matchCnt := 0
+					for j := 0; j < len(rf.matchIndex); j++ {
+						if rf.matchIndex[j] == rf.matchIndex[i] {
+							matchCnt++
+						}
+						/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
+						if matchCnt == len(rf.matchIndex)/2+1 &&
+							rf.matchIndex[i] > rf.commitIndex {
+							// updateCommitIndex()
+							rf.commitIndex = rf.matchIndex[i]
+							if rf.commitIndex > rf.lastApplied {
+								go rf.ApplyCommittedMsgs()
 							}
-							/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
-							if matchCnt == len(rf.matchIndex)/2+1 &&
-								rf.matchIndex[i] > rf.commitIndex {
-								// updateCommitIndex()
-								rf.commitIndex = rf.matchIndex[i]
-								if rf.commitIndex > rf.lastApplied {
-									go rf.ApplyCommittedMsgs()
-								}
-								break
-							}
+							break
 						}
 					}
 					rf.mu.Unlock()
@@ -178,9 +162,9 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					if rf.nextIndex[i] > 1 {
 						rf.nextIndex[i]--
 					}
-					rf.mu.Unlock()
-					/* continue */
 				}
+				rf.mu.Unlock()
+				/* continue */
 			}
 		}(i)
 	}
@@ -198,10 +182,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	/* 设置返回任期 */
+	/* 设置返回值为 follower 的任期 */
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
-		/* 如果领导者的任期比自己的低 ，返回错误*/
+		/* 1.  如果领导者的任期 小于 接收者的当前任期 返回假 */
 		reply.Success = false
 		return
 	} else if args.Term > rf.currentTerm {
@@ -209,6 +193,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]现在的任期是%d, 收到了任期为%d 的 [%d]的 AppendEntriesRPC", rf.me, rf.currentTerm, args.Term, args.LeaderId))
 		rf.currentTerm = args.Term
 	} else {
+		/* ASSERT(rf.currentTerm == args.Term) */
 		if rf.state == Candidater {
 			/* 选举人收到了新 leader 的 appendEntriesRpc */
 			rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]现在是一个选举人 任期是%d, 收到了任期为%d 的 [%d]的 AppendEntriesRPC", rf.me, rf.currentTerm, args.Term, args.LeaderId))
@@ -218,6 +203,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	/* ASSERT( rf.state == FOLLOWER) */
 
+	/*  即该条目的任期在prevLogIndex上能和prevLogTerm匹配上*/
 	/* PrevLogIndex > 最后一条日志的坐标 */
 	if args.PrevLogIndex > len(rf.log)-1 ||
 		args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
@@ -241,8 +227,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		rf.logger.Infof("[%d] AppendEntries OK!", rf.me)
-		rf.appendEntriesRpcCh <- true /* 重置等待选举的超时定时器 */
+		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
+		reply.MatchIndex = len(rf.log) - 1
 	}
 }
 
@@ -250,17 +237,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) ApplyCommittedMsgs() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// log.Print(rf.commitIndex, rf.lastApplied+1, len(rf.log))
 
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		// log.Printf("[%d] ApplyCommittedMsgs %d: %v", rf.me, i, rf.log[i])
-
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[i].Command,
 			CommandIndex: i,
 		}
-		// log.Printf("[%d] ApplyCommittedMsgs %d ok", rf.me, i)
 	}
 	rf.lastApplied = rf.commitIndex
 }

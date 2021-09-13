@@ -10,6 +10,20 @@ const (
 	Follower
 )
 
+func (s State) ToString() string {
+	switch s {
+	case Leader:
+		return "Leader"
+	case Candidater:
+		return "Candidater"
+	case Follower:
+		return "Follower"
+	default:
+		log.Fatalf("bug?")
+		return "(nil)"
+	}
+}
+
 /* （需要外界加锁）服务器状态或者任期发生变化 填入的 oldTerm == -1 || oldState == -1 表示我们不关心相关的属性 */
 func (rf *Raft) AreStateOrTermChangeWithLock(oldTerm int, oldState State) (bool, int, State) {
 	/* 状态改变  */
@@ -44,16 +58,17 @@ func (rf *Raft) ResetToFollower(reason string) {
 }
 
 func (rf *Raft) ResetToFollowerWithLock(reason string) {
-	log.Printf("[%d] ResetToFollower with log: %v, term: %v reason: %s", rf.me, rf.log, rf.currentTerm, reason)
+	log.Printf("T[%d] S%d ResetToFollower with log: %v, term: %v reason: %s",
+		rf.currentTerm, rf.me, rf.log, rf.currentTerm, reason)
 	switch rf.state {
 	case Leader:
-		rf.logger.Infof("[%d]  LEADER --> FOLLOWER!", rf.me)
+		log.Printf("T[%d] S[%d] LEADER --> FOLLOWER!", rf.currentTerm, rf.me)
 	case Candidater:
-		rf.logger.Infof("[%d]  CANDIDATER --> FOLLOWER!", rf.me)
+		log.Printf("T[%d] S[%d] CANDIDATER --> FOLLOWER!", rf.currentTerm, rf.me)
 	case Follower:
-		rf.logger.Infof("[%d]  FOLLLOWER --> FOLLOWER!", rf.me)
+		log.Printf("T[%d] S[%d] FOLLLOWER --> FOLLOWER!", rf.currentTerm, rf.me)
 	default:
-		rf.logger.Fatalf("[%d]  UNKNOWN --> FOLLOWER!", rf.me)
+		log.Fatalf("T[%d] S[%d] ERROR?!", rf.currentTerm, rf.me)
 	}
 	rf.state = Follower
 	rf.votedFor = -1
@@ -61,10 +76,11 @@ func (rf *Raft) ResetToFollowerWithLock(reason string) {
 
 func (rf *Raft) TurnToLeaderWithLock() {
 	/* assert rf.state = Candidater */
-	rf.logger.Infof("[%d] CANDIDATER --> LEADER!", rf.me)
-	log.Printf("[%d] TurnToLeaderWithLock with log: %v term: %v", rf.me, rf.log, rf.currentTerm)
+	rf.logger.Infof("S[%d] CANDIDATER --> LEADER!", rf.me)
+	log.Printf("T[%d] S[%d] TurnToLeaderWithLock with log: %v term: %v", rf.currentTerm, rf.me, rf.log, rf.currentTerm)
 
 	rf.state = Leader
+	rf.votedFor = -1
 	// update nextIndex[]
 	for i := 0; i < len(rf.peers); i++ {
 		rf.nextIndex[i] = len(rf.log)

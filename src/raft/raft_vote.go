@@ -2,7 +2,7 @@ package raft
 
 import (
 	"fmt"
-	_ "log"
+	"log"
 	"math/rand"
 	"sync/atomic"
 	"time"
@@ -24,8 +24,9 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	Term        int  /* 投票人的任期 */
-	VoteGranted bool /* 投票人是否投票 */
+	Term        int    /* 投票人的任期 */
+	VoteGranted bool   /* 投票人是否投票 */
+	Reason      string /* 拒绝的原因 */
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -43,19 +44,22 @@ func (rf *Raft) ticker() {
 
 	for !rf.killed() {
 		select {
-		/* 如果在超时之前收到了当前领导人的请求 */
-		case <-rf.appendEntriesRpcCh:
-			rf.logger.Infof("[%d] ticker: get appendEntriesRpc, so reset the timer", rf.me)
+		/* 重置超时的方法 */
+		case <-rf.resetTimerCh:
+			rf.logger.Infof("[%d] ticker: reset the timer", rf.me)
 			// /* 如果 当前领导者发 参选者 ---> 跟随者 */
-			timeout.Reset(time.Duration(rand.Int63n(300)+300) *
-				time.Millisecond)
+			timeout.Reset(time.Duration(rand.Int63n(300)+300) * time.Millisecond)
 			/* 关闭计时器 */
 		case <-timeout.C:
 			/* 如果计时器超时 ，执行超时回调 */
 			rf.logger.Infof("[%d] ticker: timeout ", rf.me)
-			timeout.Reset(time.Duration(rand.Int63n(300)+300) *
-				time.Millisecond)
-			go rf.VoteTimeOutCallBack()
+			timeout.Reset(time.Duration(rand.Int63n(300)+300) * time.Millisecond)
+			/* 如果当前节点是领导者 */
+			rf.mu.Lock()
+			if rf.state != Leader {
+				go rf.VoteTimeOutCallBack()
+			}
+			rf.mu.Unlock()
 		}
 	}
 }
@@ -66,17 +70,11 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 
 	var voteCnt int
 	rf.mu.Lock()
-	if rf.state == Leader {
-		rf.logger.Infof("[%d] VoteTimeOutCallBack: It seems like [%d] is not a follower or candidater but a leader", rf.me, rf.me)
-		rf.mu.Unlock()
-		return
-	}
 
 	rf.state = Candidater
-	rf.currentTerm++ /* 自增当前的任期号 */
-	// rf.logger.Infof("[%d] currentTerm: %d", rf.me, rf.currentTerm)
+	rf.currentTerm++          /* 自增当前的任期号 */
+	oldState := rf.state      /* Candidater */
 	oldTerm := rf.currentTerm /* 记录当前任期号 */
-	oldState := rf.state
 
 	rf.votedFor = rf.me /* 投票给自己 */
 	voteCnt++
@@ -110,38 +108,53 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 				LastLogIndex: logLen - 1,
 				LastLogTerm:  rf.log[logLen-1].Term,
 			}
+			log.Printf("T[%d] S[%d] sendRequestVote to [%d]", rf.currentTerm, rf.me, i)
 			rf.mu.Unlock()
+
+			/* =======UNLOCK SPACE========== */
 			/* 也许这时候已经选举发生了改变... 但由于没有加锁(也不该加锁)，
 			我们毅然决然的发送了 */
-			rf.logger.Infof("[%d] sendRequestVote %v to [%d]", rf.me, args, i)
-			for ok := rf.sendRequestVote(i, args, reply); !ok; ok = rf.sendRequestVote(i, args, reply) {
-				if rf.killed() {
-					return
-				}
-				rf.logger.Infof("[%d] sendRequestVote to [%d]: not ok", rf.me, i)
+			rf.logger.Infof("S[%d] sendRequestVote %v to [%d]", rf.me, args, i)
+			if ok := rf.sendRequestVote(i, args, reply); !ok {
+				rf.logger.Infof("S[%d] sendRequestVote to [%d]: not ok", rf.me, i)
+				return
+				// if rf.killed() {
+				// 	return
+				// }
+				// rf.logger.Infof("[%d] sendRequestVote to [%d]: not ok", rf.me, i)
+				// continue
 			}
-			rf.logger.Infof("[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
+			rf.logger.Infof("S[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
+			/* =======UNLOCK SPACE========== */
 
 			rf.mu.Lock()
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.logger.Infof("[%d] VoteTimeOutSendVote: state changed!", rf.me)
+				rf.logger.Infof("S[%d] VoteTimeOutSendVote: state changed!", rf.me)
 				rf.mu.Unlock()
 				return
 			}
 			/* 拿到这张票 */
 			if reply.VoteGranted {
 				voteCnt++
-				rf.logger.Infof("[%d] get [%d] vote, now it have %d votes", rf.me, i, voteCnt)
+				rf.logger.Infof("S[%d] get S[%d] vote, now it have %d votes", rf.me, i, voteCnt)
 				if voteCnt == len(rf.peers)/2+1 {
 					rf.TurnToLeaderWithLock()
 				}
 			} else if reply.Term > rf.currentTerm {
+				/* 没有拿到这张票 */
 				/* 任期小 不配当领导者 变回 跟随者 */
+				log.Printf("T[%d] S[%d] vote is rejected by S[%d] because: %s", rf.currentTerm, rf.me, i, reply.Reason)
+
 				rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期 %d 不配当领导者", rf.me, rf.currentTerm, i, reply.Term))
 				rf.currentTerm = reply.Term /* 更新任期 */
+			} else {
+				/* 其他拒绝原因  */
+				log.Printf("T[%d] S[%d] vote is rejected by S[%d] because: %s", rf.currentTerm, rf.me, i, reply.Reason)
 			}
 			rf.mu.Unlock()
+			// return
+			// }
 		}(i)
 	}
 }
@@ -160,36 +173,29 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		/* 如果选举者的任期比自己的低 */
-		rf.logger.Infof("[%d] term is less than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
+		// rf.logger.Infof("[%d] term is less than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
+		reply.Reason = fmt.Sprintf("S[%d] term T[%d] is less than S[%d] term T[%d]", args.CandidateId, args.Term, rf.me, rf.currentTerm)
 		reply.VoteGranted = false
-		return
-	} else if args.Term == rf.currentTerm {
-		/* 如果选举者的任期和自己相同 我已经投过票*/
-		if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
-			rf.logger.Infof("[%d] have vote for [%d] so cannot vote for [%d]", rf.me, rf.votedFor, args.CandidateId)
+	} else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		/* 任期新 */
+		if ok, err_reason := rf.ArelogNewerWithLock(args); ok {
+			log.Printf("T[%d] S[%d] vote for S[%d]", rf.currentTerm, rf.me, args.CandidateId)
+			rf.votedFor = args.CandidateId
+			reply.VoteGranted = true
+		} else {
+			reply.Reason = err_reason
 			reply.VoteGranted = false
-			return
 		}
-	} else /*  if args.Term > rf.currentTerm */ {
-		/* 如果选举者的任期比自己的高，更新自己任期 */
-		rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期%d 不配当领导者", rf.me, rf.currentTerm, args.CandidateId, args.Term))
-		rf.currentTerm = args.Term
-		/* 先别投票 （得对方的 日志是否够新）*/
-	}
-
-	/* 候选人的日志没有和自己一样新	 先最后一个项的任期 再比较长度 */
-	if args.LastLogTerm < rf.log[len(rf.log)-1].Term ||
-		(args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex < len(rf.log)-1) {
-		rf.logger.Infof("[%d] log is old than [%d] so cannot vote for [%d]", args.CandidateId, rf.me, args.CandidateId)
-		// rf.logger.Infof("[%d] args.LastLogIndex =%d, args.LastLogTerm =%d, len(rf.log) =%d  rf.log[len(rf.log)-1].Term = %d",
-		// 	rf.me, args.LastLogIndex, args.LastLogTerm, len(rf.log), rf.log[len(rf.log)-1].Term)
+	} else {
+		reply.Reason = fmt.Sprintf("S[%d] vote for S[%d] before, so can not vote for S[%d]", rf.currentTerm, rf.votedFor, args.CandidateId)
 		reply.VoteGranted = false
-		return
 	}
 
-	/* 否则将票投给他 */
-	rf.votedFor = args.CandidateId
-	reply.VoteGranted = true
+	if args.Term > rf.currentTerm {
+		/* 如果选举者的任期比自己的高，更新自己任期 */
+		rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期%d", rf.me, rf.currentTerm, args.CandidateId, args.Term))
+		rf.currentTerm = args.Term
+	}
 }
 
 //
@@ -224,4 +230,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
+}
+
+/* 参选者的日志是否更加新？ */
+func (rf *Raft) ArelogNewerWithLock(args *RequestVoteArgs) (bool, string) {
+	/* 先比任期 */
+	lastLogTerm := rf.log[len(rf.log)-1].Term
+	if args.LastLogTerm < lastLogTerm {
+		return false, fmt.Sprintf("S[%d] LastLogTerm T[%d] < S[%d] LastLogTerm T[%d]", args.CandidateId, args.LastLogTerm, rf.me, lastLogTerm)
+	}
+
+	/* 任期相同 比最后日志的坐标 */
+	lastLogIndex := len(rf.log) - 1
+	if args.LastLogTerm == lastLogTerm &&
+		args.LastLogIndex < lastLogIndex {
+		return false, fmt.Sprintf("S[%d] LastLogIndex T[%d] < S[%d] LastLogIndex T[%d]", args.CandidateId, args.LastLogIndex, rf.me, lastLogIndex)
+	}
+	return true, ""
 }
