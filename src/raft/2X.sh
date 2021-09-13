@@ -1,5 +1,5 @@
 ##
-## sh ./2X.sh [A|B|C|D] <test>
+## ./2X.sh [A|B|C|D] <test>
 ##
 for ((i = 0; i < 50; i++)); do
 	if [ "$2" != "" ]; then
