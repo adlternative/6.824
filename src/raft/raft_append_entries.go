@@ -102,6 +102,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 
 				args.Entries = make([]RaftLog, len(rf.log[rf.nextIndex[i]:]))
 				copy(args.Entries, rf.log[rf.nextIndex[i]:])
+				rf.DebugWithLock("want to send logs:%v to S[%d]", args.Entries, i)
 
 				rf.mu.Unlock()
 
@@ -124,12 +125,13 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 				if reply.Success {
 					heartBeatAckCnt++
 					rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
+
 					/* 更新 matchIndex AND nextIndex */
 					rf.matchIndex[i] = reply.MatchIndex
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
 					if rf.nextIndex[i] > len(rf.log) { //debug
 						rf.mu.Unlock()
-						log.Fatalf("rf.nextIndex[i]=%d len(rf.log)=%d", rf.nextIndex[i], len(rf.log))
+						log.Fatalf("[BUG] rf.nextIndex[i]=%d len(rf.log)=%d", rf.nextIndex[i], len(rf.log))
 					}
 					matchCnt := 0
 					for j := 0; j < len(rf.matchIndex); j++ {
@@ -152,9 +154,10 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 				} else if reply.Term > rf.currentTerm {
 					/* 任期小 不配当领导者 */
 					/* 变回 跟随者 */
-					rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期 %d 不配当领导者", rf.me, rf.currentTerm, i, reply.Term))
+					rf.ResetToFollowerWithLock(fmt.Sprintf("小于[%d]任期 %d 不配当领导者", i, reply.Term))
+					rf.votedFor = -1
 					rf.currentTerm = reply.Term /* 更新任期 */
-					rf.logger.Infof("[%d] term = %d", rf.me, rf.currentTerm)
+					// rf.logger.Infof("[%d] term = %d", rf.me, rf.currentTerm)
 					rf.mu.Unlock()
 					return
 				} else {
@@ -190,13 +193,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	} else if args.Term > rf.currentTerm {
 		/* 如果领导者的任期比自己的高，更新自己任期 */
-		rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]现在的任期是%d, 收到了任期为%d 的 [%d]的 AppendEntriesRPC", rf.me, rf.currentTerm, args.Term, args.LeaderId))
+		rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
+		rf.votedFor = -1
 		rf.currentTerm = args.Term
 	} else {
 		/* ASSERT(rf.currentTerm == args.Term) */
 		if rf.state == Candidater {
 			/* 选举人收到了新 leader 的 appendEntriesRpc */
-			rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]现在是一个选举人 任期是%d, 收到了任期为%d 的 [%d]的 AppendEntriesRPC", rf.me, rf.currentTerm, args.Term, args.LeaderId))
+			rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
+			rf.votedFor = -1
 			/* 变回 跟随者 */
 		}
 	}
@@ -205,28 +210,32 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	/*  即该条目的任期在prevLogIndex上能和prevLogTerm匹配上*/
 	/* PrevLogIndex > 最后一条日志的坐标 */
-	if args.PrevLogIndex > len(rf.log)-1 ||
+	if args.PrevLogIndex != len(rf.log)-1 ||
 		args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
+		rf.DebugWithLock("reject logs from S[%d] because S[%d] isn't newer than it", args.LeaderId, args.LeaderId)
 		reply.Success = false
 	} else {
-		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
-		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
+		if args.Entries == nil {
+			rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
+		} else {
+			rf.DebugWithLock("get log entries from S[%d]", args.LeaderId)
 
-		/* 去除冲突项 */
-		rf.log = rf.log[:args.PrevLogIndex+1]
-		/* 后添新项 */
-		rf.log = append(rf.log, args.Entries...)
-		rf.logger.Infof("AppendEntries args: %#v", args)
-		rf.logger.Infof("len(log): %d, rf.log: %v\n", len(rf.log), rf.log)
+			/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
+			/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
+
+			/* 去除冲突项 */
+			rf.log = rf.log[:args.PrevLogIndex+1]
+			/* 后添新项 */
+			rf.log = append(rf.log, args.Entries...)
+			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
+
+		}
 		/* 更新 commitIndex  */
-		rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
-
+		rf.commitIndex = Min(args.LeaderCommit, len(rf.log))
 		/* 还应该 log apply to state machine */
 		if rf.commitIndex > rf.lastApplied {
 			go rf.ApplyCommittedMsgs()
 		}
-
-		rf.logger.Infof("[%d] AppendEntries OK!", rf.me)
 		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
 		reply.MatchIndex = len(rf.log) - 1
@@ -237,6 +246,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) ApplyCommittedMsgs() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DebugWithLock("append log entries log[%d:%d]:%v to app",
+		rf.lastApplied+1, rf.commitIndex+1, rf.log[rf.lastApplied+1:rf.commitIndex+1])
 
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 		rf.applyCh <- ApplyMsg{

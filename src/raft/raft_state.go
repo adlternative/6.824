@@ -10,16 +10,16 @@ const (
 	Follower
 )
 
-func (s State) ToString() string {
+func (s State) String() string {
 	switch s {
 	case Leader:
-		return "Leader"
+		return "LEADER"
 	case Candidater:
-		return "Candidater"
+		return "CANDIDATER"
 	case Follower:
-		return "Follower"
+		return "FOLLOWER"
 	default:
-		log.Fatalf("bug?")
+		log.Fatalf("[BUG] unknown state?")
 		return "(nil)"
 	}
 }
@@ -58,26 +58,24 @@ func (rf *Raft) ResetToFollower(reason string) {
 }
 
 func (rf *Raft) ResetToFollowerWithLock(reason string) {
-	log.Printf("T[%d] S%d ResetToFollower with log: %v, term: %v reason: %s",
-		rf.currentTerm, rf.me, rf.log, rf.currentTerm, reason)
+	rf.DebugWithLock("ResetToFollower with log: %v  reason: %s", rf.log, reason)
 	switch rf.state {
 	case Leader:
-		log.Printf("T[%d] S[%d] LEADER --> FOLLOWER!", rf.currentTerm, rf.me)
+		rf.DebugWithLock("LEADER --> FOLLOWER!")
 	case Candidater:
-		log.Printf("T[%d] S[%d] CANDIDATER --> FOLLOWER!", rf.currentTerm, rf.me)
+		rf.DebugWithLock("CANDIDATER --> FOLLOWER!")
 	case Follower:
-		log.Printf("T[%d] S[%d] FOLLLOWER --> FOLLOWER!", rf.currentTerm, rf.me)
+		rf.DebugWithLock("FOLLLOWER --> FOLLOWER!")
 	default:
-		log.Fatalf("T[%d] S[%d] ERROR?!", rf.currentTerm, rf.me)
+		log.Fatalf("ERROR?!")
 	}
 	rf.state = Follower
-	rf.votedFor = -1
 }
 
 func (rf *Raft) TurnToLeaderWithLock() {
 	/* assert rf.state = Candidater */
-	rf.logger.Infof("S[%d] CANDIDATER --> LEADER!", rf.me)
-	log.Printf("T[%d] S[%d] TurnToLeaderWithLock with log: %v term: %v", rf.currentTerm, rf.me, rf.log, rf.currentTerm)
+	rf.DebugWithLock("CANDIDATER --> LEADER!")
+	rf.DebugWithLock("TurnToLeaderWithLock with log: %v", rf.log)
 
 	rf.state = Leader
 	rf.votedFor = -1

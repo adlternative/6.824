@@ -22,8 +22,6 @@ import (
 	// "context"
 	// "log"
 	"fmt"
-	"log"
-	// "log"
 	"math/rand"
 	"os"
 	"runtime"
@@ -132,7 +130,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = append(rf.log, RaftLog{})
 	rf.resetTimerCh = make(chan bool)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
-	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(300)+300) * time.Millisecond
+	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -177,10 +175,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		isLeader = rf.state == Leader
 		if isLeader {
-			rf.log = append(rf.log, RaftLog{command, term})
+			log_entry := RaftLog{command, term}
+			rf.log = append(rf.log, log_entry)
 			rf.logger.Info(rf.log)
 			index = len(rf.log) - 1
-			log.Printf("T[%d] S[%d] start command %v in index(%d)", rf.currentTerm, rf.me, command, index)
+			rf.DebugWithLock("start log: %v in index(%d)", log_entry, index)
 			rf.matchIndex[rf.me] = index
 		}
 		rf.mu.Unlock()

@@ -78,7 +78,7 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 	cfg.endnames = make([][]string, cfg.n)
 	cfg.logs = make([]map[int]interface{}, cfg.n)
 	cfg.start = time.Now()
-
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	cfg.setunreliable(unreliable)
 
 	cfg.net.LongDelays(true)
@@ -537,13 +537,13 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
-				cfg.t.Fatalf("one(%v) failed to reach agreement?", cmd)
+				cfg.t.Fatalf("one(%v) failed to reach agreement? timeout:%s", cmd, time.Now().Local().UTC().Format(time.StampMicro))
 			}
 		} else {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	cfg.t.Fatalf("one(%v) failed to reach agreement!", cmd)
+	cfg.t.Fatalf("one(%v) failed to reach agreement! timeout:%s", cmd, time.Now().Local().UTC().Format(time.StampMicro))
 	return -1
 }
 
