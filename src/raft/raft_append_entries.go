@@ -210,28 +210,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	/*  即该条目的任期在prevLogIndex上能和prevLogTerm匹配上*/
 	/* PrevLogIndex > 最后一条日志的坐标 */
-	if args.PrevLogIndex != len(rf.log)-1 ||
+	if args.PrevLogIndex > len(rf.log)-1 ||
 		args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
-		rf.DebugWithLock("reject logs from S[%d] because S[%d] isn't newer than it", args.LeaderId, args.LeaderId)
+		rf.DebugWithLock("reject logs from S[%d] because S[%d] PrevLog doesn't match", args.LeaderId, args.LeaderId)
 		reply.Success = false
 	} else {
+		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
+		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
+		/* 去除冲突项 */
+		rf.log = rf.log[:args.PrevLogIndex+1]
+
 		if args.Entries == nil {
 			rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
 		} else {
 			rf.DebugWithLock("get log entries from S[%d]", args.LeaderId)
-
-			/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
-			/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
-
-			/* 去除冲突项 */
-			rf.log = rf.log[:args.PrevLogIndex+1]
 			/* 后添新项 */
 			rf.log = append(rf.log, args.Entries...)
 			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
 
 		}
 		/* 更新 commitIndex  */
-		rf.commitIndex = Min(args.LeaderCommit, len(rf.log))
+		rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
 		/* 还应该 log apply to state machine */
 		if rf.commitIndex > rf.lastApplied {
 			go rf.ApplyCommittedMsgs()
