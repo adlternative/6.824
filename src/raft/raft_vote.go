@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"math/rand"
+	// "runtime"
 	"sync/atomic"
 	"time"
 )
@@ -35,8 +36,10 @@ func (rf *Raft) ticker() {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
 
-	rf.logger.Infof("[%d] ticker: start", rf.me)
-	defer rf.logger.Infof("[%d] ticker: stop", rf.me)
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+	// }
 
 	timeout := time.NewTimer(rf.recvHeartBeatTimeOut)
 	defer timeout.Stop()
@@ -45,31 +48,32 @@ func (rf *Raft) ticker() {
 		select {
 		/* 重置超时的方法 */
 		case <-rf.resetTimerCh:
-			rf.logger.Infof("S[%d] ticker: reset the timer", rf.me)
+			// rf.Debug("ticker: reset the timer")
 			// /* 如果 当前领导者发 参选者 ---> 跟随者 */
 			timeout.Reset(time.Duration(rand.Int63n(500)+500) * time.Millisecond)
 			/* 关闭计时器 */
 		case <-timeout.C:
 			/* 如果计时器超时 ，执行超时回调 */
-			rf.logger.Infof("S[%d] ticker: timeout ", rf.me)
+			// rf.Debug("ticker: timeout ")
 			timeout.Reset(time.Duration(rand.Int63n(500)+500) * time.Millisecond)
 			/* 如果当前节点是领导者 */
-			rf.mu.Lock()
-			if rf.state != Leader {
-				go rf.VoteTimeOutCallBack()
-			}
-			rf.mu.Unlock()
+			go rf.VoteTimeOutCallBack()
 		}
 	}
 }
 
 func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
-	rf.logger.Infof("[%d] VoteTimeOutCallBack: start", rf.me)
-	defer rf.logger.Infof("[%d] VoteTimeOutCallBack: stop", rf.me)
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+	// }
 
 	var voteCnt int
 	rf.mu.Lock()
-
+	if rf.state == Leader {
+		rf.mu.Unlock()
+		return
+	}
 	rf.state = Candidater
 	rf.currentTerm++          /* 自增当前的任期号 */
 	oldState := rf.state      /* Candidater */
@@ -92,12 +96,13 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			defer atomic.AddInt32(&rf.routineCnt, -1)
 
 			rf.mu.Lock()
-			rf.logger.Infof("[%d] VoteTimeOutSendVote: start", rf.me)
-			defer rf.logger.Infof("[%d] VoteTimeOutSendVote: stop", rf.me)
-
+			// if pc, _, _, ok := runtime.Caller(0); ok {
+			// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+			// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+			// }
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.logger.Infof("[%d] VoteTimeOutSendVote: state changed!", rf.me)
+				rf.DebugWithLock("VoteTimeOutSendVote: state changed!")
 				rf.mu.Unlock()
 				return
 			}
@@ -115,25 +120,26 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			/* =======UNLOCK SPACE========== */
 			/* 也许这时候已经选举发生了改变... 但由于没有加锁(也不该加锁)，
 			我们毅然决然的发送了 */
-			rf.logger.Infof("S[%d] sendRequestVote %v to [%d]", rf.me, args, i)
+			// rf.Debug("sendRequestVote %v to [%d]", args, i)
 			if ok := rf.sendRequestVote(i, args, reply); !ok {
-				rf.logger.Infof("S[%d] sendRequestVote to [%d]: not ok", rf.me, i)
+				// rf.Debug("sendRequestVote %v to [%d]", args, i)
+				// rf.Debug("sendRequestVote to [%d]: not ok", i)
 				return
 			}
-			rf.logger.Infof("S[%d] recv VoteRespond from [%d] %v", rf.me, i, reply)
+			// rf.Debug("recv VoteRespond from [%d] %v", i, reply)
 			/* =======UNLOCK SPACE========== */
 
 			rf.mu.Lock()
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-				rf.logger.Infof("S[%d] VoteTimeOutSendVote: state changed!", rf.me)
+				rf.DebugWithLock("S[%d] VoteTimeOutSendVote: state changed!", rf.me)
 				rf.mu.Unlock()
 				return
 			}
 			/* 拿到这张票 */
 			if reply.VoteGranted {
 				voteCnt++
-				rf.logger.Infof("S[%d] get S[%d] vote, now it have %d votes", rf.me, i, voteCnt)
+				rf.DebugWithLock("get S[%d] vote, now it have %d votes", i, voteCnt)
 				if voteCnt == len(rf.peers)/2+1 {
 					rf.TurnToLeaderWithLock()
 				}
@@ -161,6 +167,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
 
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+	// }
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 设置返回任期 */
@@ -184,6 +195,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				/* 日志新 */
 				rf.DebugWithLock("vote to S[%d]", args.CandidateId)
 				rf.votedFor = args.CandidateId
+				rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 				reply.VoteGranted = true
 			} else {
 				rf.DebugWithLock("don't vote to S[%d]", args.CandidateId)
@@ -202,6 +214,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 					/* 日志新 */
 					rf.DebugWithLock("vote to S[%d]", args.CandidateId)
 					rf.votedFor = args.CandidateId
+					rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 					reply.VoteGranted = true
 				} else {
 					rf.DebugWithLock("don't vote to S[%d]", args.CandidateId)

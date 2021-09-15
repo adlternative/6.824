@@ -22,17 +22,21 @@ import (
 	// "context"
 	// "log"
 	"fmt"
-	"math/rand"
-	"os"
+	"log"
 	"runtime"
-	"strconv"
+
+	// "log"
+	"math/rand"
+	// "os"
+	// "runtime"
+	// "strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
-	"github.com/google/logger"
+	// "github.com/google/logger"
 )
 
 //
@@ -102,7 +106,7 @@ type Raft struct {
 
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
-	logger               *logger.Logger
+	// logger               *logger.Logger
 
 	routineCnt int32 // 主动开的 go协程数量统计
 }
@@ -139,15 +143,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 
 	/* log for debug */
-	lf, err := os.OpenFile(time.Now().Format(time.RFC3339)+strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
-	if err != nil {
-		logger.Fatalf("Failed to open log file: %v", err)
-	}
-	rf.logger = logger.Init("raftlog", false, true, lf)
+	// lf, err := os.OpenFile(time.Now().Format(time.RFC3339)+strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
+	// if err != nil {
+	// 	log.Fatalf("Failed to open log file: %v", err)
+	// }
+	// rf.logger = logger.Init("raftlog", false, true, lf)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-	go rf.RoutineCntDebug()
+	go rf.RoutineCntDebug(2)
 	return rf
 }
 
@@ -177,7 +181,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		if isLeader {
 			log_entry := RaftLog{command, term}
 			rf.log = append(rf.log, log_entry)
-			rf.logger.Info(rf.log)
+			// rf.logger.Info(rf.log)
 			index = len(rf.log) - 1
 			rf.DebugWithLock("start log: %v in index(%d)", log_entry, index)
 			rf.matchIndex[rf.me] = index
@@ -187,10 +191,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-func (rf *Raft) RoutineCntDebug() {
+func (rf *Raft) RoutineCntDebug(internal int) {
 	for {
-		time.Sleep(time.Second)
-		rf.logger.Infof("[%d] go rountine count: %d, total: %d", rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
+		log.Printf("S[%d] go rountine count: %d, total: %d",
+			rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
+		time.Sleep(time.Duration(internal) * time.Second)
 	}
 }
 

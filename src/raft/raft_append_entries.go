@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	// "runtime"
 	"sync/atomic"
 	"time"
 )
@@ -27,9 +28,10 @@ type AppendEntriesReply struct {
 func (rf *Raft) HeartBeatTicker() {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
-
-	rf.logger.Infof("[%d] HeartBeatTicker: begin", rf.me)
-	defer rf.logger.Infof("[%d] HeartBeatTicker: end", rf.me)
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.Debug("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.Debug("[%d] %s: end", rf.me, Trace(pc))
+	// }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -57,12 +59,14 @@ func (rf *Raft) HeartBeatTicker() {
 /* 领导者服务器心跳超时的回调函数 */
 func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.CancelFunc) {
 	var heartBeatAckCnt int
-	rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: begin", rf.me)
-	defer rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: end", rf.me)
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+	// }
 
 	changed, oldTerm, oldState := rf.AreStateOrTermChange(-1, Leader)
 	if changed {
-		rf.logger.Infof("[%d] HeartBeatTimeOutCallBack: state or term change", rf.me)
+		// rf.Debug("HeartBeatTimeOutCallBack: state or term change")
 		cancel()
 		return
 	}
@@ -77,15 +81,17 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			atomic.AddInt32(&rf.routineCnt, 1)
 			defer atomic.AddInt32(&rf.routineCnt, -1)
 
-			rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: begin", rf.me)
-			defer rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: end", rf.me)
+			// if pc, _, _, ok := runtime.Caller(0); ok {
+			// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+			// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+			// }
 
 			for !rf.killed() {
 				rf.mu.Lock()
 
 				/* 领导者状态已经发生改变 */
 				if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-					rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
+					// rf.Debug("HeartBeatTimeOutSendAppendEntriesRPC: state or term change")
 					cancel()
 					rf.mu.Unlock()
 					return
@@ -109,7 +115,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 				/* ==========UNLOCK SPACE========= */
 				/* [TODO] 出错多少次退出？ */
 				if ok := rf.sendAppendEntries(i, args, reply); !ok {
-					rf.logger.Infof("[%d] sendAppendEntries to [%d]: not ok", rf.me, i)
+					// rf.Debug("sendAppendEntries to [%d]: not ok", rf.me, i)
 					return
 				}
 				/* =================== */
@@ -117,38 +123,49 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 				rf.mu.Lock()
 				/* 领导者状态已经发生改变 */
 				if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-					rf.logger.Infof("[%d] HeartBeatTimeOutSendAppendEntriesRPC: state or term change", rf.me)
+					rf.DebugWithLock("HeartBeatTimeOutSendAppendEntriesRPC: state or term change")
 					cancel()
 					rf.mu.Unlock()
 					return
 				}
 				if reply.Success {
 					heartBeatAckCnt++
-					rf.logger.Infof("[%d] get heartBeatAck from [%d], now it get %d Ack", rf.me, i, heartBeatAckCnt)
+					rf.DebugWithLock(" get heartBeatAck from [%d], now it get %d Ack", i, heartBeatAckCnt)
 
 					/* 更新 matchIndex AND nextIndex */
 					rf.matchIndex[i] = reply.MatchIndex
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
+
+					// if rf.log[rf.matchIndex[i]].Term != oldTerm && rf.log[rf.matchIndex[i]].Term != 0 { //debug
+					// 	rf.mu.Unlock()
+					// 	log.Fatalf("[BUG] expect rf.log[rf.matchIndex[i]].Term == oldTerm but oldTerm=%d matchIndex[%d]=%d log_term=%d",
+					// 		oldTerm, i, rf.matchIndex[i], rf.log[rf.matchIndex[i]].Term)
+					// }
 					if rf.nextIndex[i] > len(rf.log) { //debug
 						rf.mu.Unlock()
-						log.Fatalf("[BUG] rf.nextIndex[i]=%d len(rf.log)=%d", rf.nextIndex[i], len(rf.log))
+						log.Fatalf("[BUG] rf.nextIndex[%d]=%d >len(rf.log)=%d",
+							i, rf.nextIndex[i], len(rf.log))
 					}
-					matchCnt := 0
-					for j := 0; j < len(rf.matchIndex); j++ {
-						if rf.matchIndex[j] == rf.matchIndex[i] {
-							matchCnt++
-						}
-						/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
-						if matchCnt == len(rf.matchIndex)/2+1 &&
-							rf.matchIndex[i] > rf.commitIndex {
-							// updateCommitIndex()
-							rf.commitIndex = rf.matchIndex[i]
-							if rf.commitIndex > rf.lastApplied {
-								go rf.ApplyCommittedMsgs()
+
+					if rf.log[rf.matchIndex[i]].Term == rf.currentTerm {
+						matchCnt := 0
+						for j := 0; j < len(rf.matchIndex); j++ {
+							if rf.matchIndex[j] == rf.matchIndex[i] {
+								matchCnt++
 							}
-							break
+							/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
+							if matchCnt == len(rf.matchIndex)/2+1 &&
+								rf.matchIndex[i] > rf.commitIndex {
+								// updateCommitIndex()
+								rf.commitIndex = rf.matchIndex[i]
+								if rf.commitIndex > rf.lastApplied {
+									go rf.ApplyCommittedMsgs()
+								}
+								break
+							}
 						}
 					}
+
 					rf.mu.Unlock()
 					return
 				} else if reply.Term > rf.currentTerm {
@@ -181,6 +198,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
+
+	// if pc, _, _, ok := runtime.Caller(0); ok {
+	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
+	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
+	// }
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -227,7 +249,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			/* 后添新项 */
 			rf.log = append(rf.log, args.Entries...)
 			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
-
 		}
 		/* 更新 commitIndex  */
 		rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
@@ -245,7 +266,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) ApplyCommittedMsgs() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.DebugWithLock("append log entries log[%d:%d]:%v to app",
+	rf.DebugWithLock("apply log entries log[%d:%d]:%v to app",
 		rf.lastApplied+1, rf.commitIndex+1, rf.log[rf.lastApplied+1:rf.commitIndex+1])
 
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {

@@ -1,6 +1,10 @@
 package raft
 
-import "log"
+import (
+	"fmt"
+	"log"
+	"runtime"
+)
 
 // Debugging
 const Debug = false
@@ -37,4 +41,8 @@ func Min(a, b int) int {
 		return b
 	}
 	return a
+}
+
+func Trace(pc uintptr) string {
+	return fmt.Sprintf("func name: " + runtime.FuncForPC(pc).Name())
 }
