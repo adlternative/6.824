@@ -208,11 +208,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				assert args.Term == rf.currentTerm
 			*/
 			/* 如果任期相同且没有投给别人且更新就投 */
-			if rf.state != Leader && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
+			if /* rf.state != Leader && */ rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 				/* 没有投票给其他人 */
 				if ok, err_reason := rf.ArelogNewerWithLock(args); ok {
 					/* 日志新 */
 					rf.DebugWithLock("vote to S[%d]", args.CandidateId)
+					rf.ResetToFollowerWithLock("任期相同且没有投给别人且更新就投")
 					rf.votedFor = args.CandidateId
 					rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 					reply.VoteGranted = true
