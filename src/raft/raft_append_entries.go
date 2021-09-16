@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+
 	// "runtime"
 	"sync/atomic"
 	"time"
@@ -19,9 +20,11 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term       int  /* 投票人的任期 */
-	Success    bool /*  如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了 结果为真*/
-	MatchIndex int  /* 跟随者的最后日志索引 */
+	Term          int  /* 投票人的任期 */
+	Success       bool /*  如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了 结果为真*/
+	MayMatchIndex int  /* 跟随者的最后日志索引 */
+
+	// UnMatchPrevLogTerm int  /* 不匹配的 prevlog 记录的任期 */
 }
 
 /* leader 才可以定期发送心跳包 */
@@ -133,14 +136,9 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					rf.DebugWithLock(" get heartBeatAck from [%d], now it get %d Ack", i, heartBeatAckCnt)
 
 					/* 更新 matchIndex AND nextIndex */
-					rf.matchIndex[i] = reply.MatchIndex
+					rf.matchIndex[i] = reply.MayMatchIndex
 					rf.nextIndex[i] = rf.matchIndex[i] + 1
 
-					// if rf.log[rf.matchIndex[i]].Term != oldTerm && rf.log[rf.matchIndex[i]].Term != 0 { //debug
-					// 	rf.mu.Unlock()
-					// 	log.Fatalf("[BUG] expect rf.log[rf.matchIndex[i]].Term == oldTerm but oldTerm=%d matchIndex[%d]=%d log_term=%d",
-					// 		oldTerm, i, rf.matchIndex[i], rf.log[rf.matchIndex[i]].Term)
-					// }
 					if rf.nextIndex[i] > len(rf.log) { //debug
 						rf.mu.Unlock()
 						log.Fatalf("[BUG] rf.nextIndex[%d]=%d >len(rf.log)=%d",
@@ -179,9 +177,8 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					return
 				} else {
 					/* 降低 nextIndex 并重试 */
-					if rf.nextIndex[i] > 1 {
-						rf.nextIndex[i]--
-					}
+					rf.nextIndex[i] = reply.MayMatchIndex + 1
+					// reply.UnMatchPrevLogTerm
 				}
 				rf.mu.Unlock()
 				/* continue */
@@ -236,6 +233,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		args.PrevLogTerm != rf.log[args.PrevLogIndex].Term {
 		rf.DebugWithLock("reject logs from S[%d] because S[%d] PrevLog doesn't match", args.LeaderId, args.LeaderId)
 		reply.Success = false
+		if args.PrevLogIndex > len(rf.log)-1 {
+			reply.MayMatchIndex = len(rf.log) - 1
+		} else {
+			for i := args.PrevLogIndex - 1; i >= 0; i-- {
+				/* 找到恰好不是该 term 的位置 */
+				if rf.log[args.PrevLogIndex].Term != rf.log[i].Term {
+					reply.MayMatchIndex = i
+				}
+			}
+		}
+
 	} else {
 		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
 		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
@@ -258,7 +266,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
-		reply.MatchIndex = len(rf.log) - 1
+		reply.MayMatchIndex = len(rf.log) - 1
 	}
 }
 
