@@ -130,8 +130,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.state = Follower
-	rf.votedFor = -1
-	rf.log = append(rf.log, RaftLog{})
 	rf.resetTimerCh = make(chan bool)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
@@ -185,6 +183,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			index = len(rf.log) - 1
 			rf.DebugWithLock("start log: %v in index(%d)", log_entry, index)
 			rf.matchIndex[rf.me] = index
+			rf.persist()
 		}
 		rf.mu.Unlock()
 	}

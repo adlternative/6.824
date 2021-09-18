@@ -75,14 +75,15 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 		return
 	}
 	rf.state = Candidater
-	rf.currentTerm++          /* 自增当前的任期号 */
+	rf.currentTerm++    /* 自增当前的任期号 */
+	rf.votedFor = rf.me /* 投票给自己 */
+	rf.persist()
+
 	oldState := rf.state      /* Candidater */
 	oldTerm := rf.currentTerm /* 记录当前任期号 */
-
-	rf.votedFor = rf.me /* 投票给自己 */
 	voteCnt++
 
-	rf.DebugWithLock("now vote (term update to %d)", rf.currentTerm)
+	rf.DebugWithLock("now sending vote (term update to %d)", rf.currentTerm)
 	rf.mu.Unlock()
 
 	/* 发送 vote request rpc */
@@ -150,6 +151,7 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 				rf.ResetToFollowerWithLock(fmt.Sprintf("[%d]任期 %d 小于[%d]任期 %d 不配当领导者", rf.me, rf.currentTerm, i, reply.Term))
 				rf.votedFor = -1
 				rf.currentTerm = reply.Term /* 更新任期 */
+				rf.persist()
 			} else {
 				/* 其他拒绝原因  */
 				rf.DebugWithLock("vote is rejected by S[%d] because: %s", i, reply.Reason)
@@ -197,11 +199,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				rf.votedFor = args.CandidateId
 				rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 				reply.VoteGranted = true
+				rf.persist()
 			} else {
 				rf.DebugWithLock("don't vote to S[%d]", args.CandidateId)
 				reply.Reason = err_reason
 				rf.votedFor = -1
 				reply.VoteGranted = false
+				rf.persist()
 			}
 		} else {
 			/*
@@ -217,11 +221,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 					rf.votedFor = args.CandidateId
 					rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 					reply.VoteGranted = true
+					rf.persist()
 				} else {
 					rf.DebugWithLock("don't vote to S[%d]", args.CandidateId)
 					reply.Reason = err_reason
 					rf.votedFor = -1
 					reply.VoteGranted = false
+					rf.persist()
 				}
 			} else {
 				rf.DebugWithLock("don't vote to S[%d]", args.CandidateId)

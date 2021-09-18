@@ -172,6 +172,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					rf.ResetToFollowerWithLock(fmt.Sprintf("小于[%d]任期 %d 不配当领导者", i, reply.Term))
 					rf.votedFor = -1
 					rf.currentTerm = reply.Term /* 更新任期 */
+					rf.persist()
 					// rf.logger.Infof("[%d] term = %d", rf.me, rf.currentTerm)
 					rf.mu.Unlock()
 					return
@@ -215,12 +216,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 		rf.votedFor = -1
 		rf.currentTerm = args.Term
+		rf.persist()
 	} else {
 		/* ASSERT(rf.currentTerm == args.Term) */
 		if rf.state == Candidater {
 			/* 选举人收到了新 leader 的 appendEntriesRpc */
 			rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 			rf.votedFor = -1
+			rf.persist()
 			/* 变回 跟随者 */
 		}
 	}
@@ -258,6 +261,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.log = append(rf.log, args.Entries...)
 			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
 		}
+
 		/* 更新 commitIndex  */
 		rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
 		/* 还应该 log apply to state machine */
@@ -267,6 +271,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
 		reply.MayMatchIndex = len(rf.log) - 1
+		rf.persist()
 	}
 }
 
