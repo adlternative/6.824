@@ -65,17 +65,6 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	/* ASSERT( rf.state == FOLLOWER) */
 
-	/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
-	则保留其后的日志条目并进行回复*/
-	if args.LastIncludedIndex < rf.log.Len() &&
-		args.LastIncludedTerm == rf.log.TermOf((args.LastIncludedIndex)) {
-		rf.DebugWithLock("the follower seem have something more than leader's snapshot, just return!")
-		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
-		reply.Success = true
-		reply.MayMatchIndex = args.LastIncludedIndex /* 移动到快照的最后坐标即可 */
-		return
-	}
-
 	/* 发来的快照旧 */
 	if args.LastIncludedIndex < rf.log.LastIncludedIndex {
 		reply.Success = false
@@ -92,11 +81,16 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 			SnapshotIndex: args.LastIncludedIndex,
 		}
 	}()
+
 	rf.snapShotPersistCond.Wait()
-	/* 条件变量 等待持久化完成的信号*/
-	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
-	reply.Success = true
 	reply.MayMatchIndex = args.LastIncludedIndex /* 移动到快照的最后坐标即可 */
+	if rf.log.LastIncludedIndex == args.LastIncludedIndex {
+		/* 条件变量 等待持久化完成的信号*/
+		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+		reply.Success = true
+	} else {
+		reply.Success = false
+	}
 }
 
 //
@@ -113,15 +107,23 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	/* 如果有新的提交日志则不安装本次的快照 */
 	if lastIncludedIndex < rf.commitIndex {
 		rf.DebugWithLock("lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
+		rf.snapShotPersistCond.Signal()
 		return false
 	}
-	rf.commitIndex = lastIncludedIndex
-	rf.lastApplied = lastIncludedIndex
 
-	rf.log.LastIncludedIndex = lastIncludedIndex
-	rf.log.LastIncludedTerm = lastIncludedTerm
-	rf.log.Entries = rf.log.Entries[:0]
-	rf.persistStateAndSnapShot(snapshot)
+	/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
+	则保留其后的日志条目并进行回复*/
+	if lastIncludedIndex < rf.log.Len() &&
+		lastIncludedTerm == rf.log.TermOf((lastIncludedIndex)) {
+		rf.DebugWithLock("follower seems have something more than this snapshot, just return!")
+	} else {
+		rf.commitIndex = lastIncludedIndex
+		rf.lastApplied = lastIncludedIndex
+		rf.log.LastIncludedIndex = lastIncludedIndex
+		rf.log.LastIncludedTerm = lastIncludedTerm
+		rf.log.Entries = rf.log.Entries[:0]
+		rf.persistStateAndSnapShot(snapshot)
+	}
 	rf.snapShotPersistCond.Signal()
 	return true
 }
@@ -148,7 +150,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		return
 	}
 
-	rf.DebugWithLock("index=%d rf.log.getEntryIndex(index)=%d rf.log=%v", index, rf.log.getEntryIndex(index), rf.log)
+	rf.DebugWithLock("Snapshot index=%d rf.log.getEntryIndex(index)=%d rf.log=%v", index, rf.log.getEntryIndex(index), rf.log)
 
 	// /* 丢弃 index 之前旧的日志 */
 	entryIndex := rf.log.getEntryIndex(index)

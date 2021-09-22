@@ -284,11 +284,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		rf.persist()
 
+		rf.DebugWithLock("args.LeaderCommit=%v rf.log.Len()-1=%v rf.lastApplied=%v",
+			args.LeaderCommit, rf.log.Len()-1, rf.lastApplied)
+
 		/* 更新 commitIndex  */
 		rf.commitIndex = Min(args.LeaderCommit, rf.log.Len()-1)
 		/* 还应该 log apply to state machine */
 		if rf.commitIndex > rf.lastApplied {
-			// rf.DebugWithLock("can apply logs")
+			rf.DebugWithLock("can apply logs")
 			go func() { rf.signalApplyCh <- interface{}(nil) }()
 		}
 		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
@@ -302,17 +305,31 @@ func (rf *Raft) ApplyCommittedMsgs() {
 	for !rf.killed() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()
+		rf.DebugWithLock("can apply logs wit lock")
+		/* bug lastApplied=0 */
+		// if rf.log.isIndexInSnapShot(rf.lastApplied + 1) {
+		// 	rf.DebugWithLock("rf.log.lastIncludedIndex=%d lastApplied=%d is in snapshot",
+		// 		rf.log.LastIncludedIndex, rf.lastApplied)
+		// 	rf.mu.Unlock()
+		// 	continue
+		// }
 
-		if rf.log.isIndexInSnapShot(rf.lastApplied + 1) {
-			rf.mu.Unlock()
-			continue
+		// for i := rf.lastApplied + 1; i <= rf.log.LastIncludedIndex; i++ {
+		// }
+		/* 安装快照到service */
+		rf.mu.Unlock()
+
+		msg := ApplyMsg{
+			CommandValid:  false,
+			SnapshotValid: true,
+			Snapshot:      rf.persister.ReadSnapshot(),
+			SnapshotTerm:  rf.log.LastIncludedIndex,
+			SnapshotIndex: rf.log.LastIncludedTerm,
 		}
+		rf.applyCh <- msg
+		rf.mu.Lock()
 
-		rf.DebugWithLock("apply log entries log[%d:%d):%v to service",
-			rf.lastApplied+1, rf.commitIndex+1,
-			rf.log.Entries[rf.log.getEntryIndex(rf.lastApplied+1):rf.log.getEntryIndex(rf.commitIndex+1)])
-
-		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+		for i := rf.log.LastIncludedIndex + 1; i <= rf.commitIndex; i++ {
 			msg := ApplyMsg{
 				CommandValid:  true,
 				Command:       rf.log.at(i).Command,
