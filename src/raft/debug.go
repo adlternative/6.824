@@ -1,3 +1,4 @@
+// package main
 package raft
 
 import (
@@ -52,9 +53,8 @@ func AnalysisLog(fileName string) error {
 	return nil
 }
 
-/* func main() {
-	if err := AnalysisLog("./B.err"); err != nil {
-		fmt.Printf(err.Error())
-	}
-}
-*/
+// func main() {
+// 	if err := AnalysisLog("./D.err"); err != nil {
+// 		fmt.Print(err.Error())
+// 	}
+// }
