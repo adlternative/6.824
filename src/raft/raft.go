@@ -63,9 +63,77 @@ type ApplyMsg struct {
 }
 
 type RaftLog struct {
-	Command interface{}
-	Term    int
+	Command    interface{}
+	Term       int
+	LogicIndex int /* 日志的逻辑索引号 */
 }
+
+type RaftLogs struct {
+	Entries           []RaftLog
+	LastIncludedIndex int
+	LastIncludedTerm  int
+}
+
+func (logs *RaftLogs) Len() int {
+	if logs.LastIncludedIndex == -1 {
+		return len(logs.Entries)
+	}
+	return len(logs.Entries) + logs.LastIncludedIndex + 1
+}
+
+func (logs *RaftLogs) getEntryIndex(index int) int {
+	if logs.LastIncludedIndex == -1 {
+		return index
+	}
+	return index - logs.LastIncludedIndex - 1
+}
+
+func (logs *RaftLogs) isIndexInSnapShot(index int) bool {
+	if logs.LastIncludedIndex == -1 {
+		return false
+	}
+	return index <= logs.LastIncludedIndex && index >= 0
+}
+
+func (logs *RaftLogs) at(index int) /* ( */ *RaftLog /* , error) */ {
+	// if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
+	// 	return nil, fmt.Errorf("index %d out of range (%d,%d)",
+	// 		index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
+	// }
+	if logs.LastIncludedIndex == index {
+		dummyLogEntry := &RaftLog{
+			nil,
+			logs.LastIncludedTerm,
+			logs.LastIncludedIndex,
+		}
+		return dummyLogEntry
+	}
+	return &logs.Entries[logs.getEntryIndex(index)] /* , nil */
+}
+
+func (logs *RaftLogs) TermOf(index int) int {
+	// if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
+	// 	return nil, fmt.Errorf("index %d out of range (%d,%d)",
+	// 		index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
+	// }
+	if logs.LastIncludedIndex == index {
+		return logs.LastIncludedTerm
+	}
+	return logs.Entries[logs.getEntryIndex(index)].Term /* , nil */
+}
+
+// func (logs *RaftLogs) getEntryIndexWithCheck(index int) (int, error) {
+
+// 	if logs.LastIncludedIndex == -1 {
+// 		return index, nil
+// 	}
+
+// 	if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
+// 		return -1, fmt.Errorf("index %d out of range (%d,%d)",
+// 			index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
+// 	}
+// 	return index - logs.LastIncludedIndex, nil
+// }
 
 func (log *RaftLog) String() string {
 	val, ok := log.Command.(int)
@@ -75,11 +143,19 @@ func (log *RaftLog) String() string {
 	return ""
 }
 
+func (log *RaftLogs) String() string {
+	return fmt.Sprintf("lastIncludedEntry:{index %d,term %d} log(%d):%v",
+		log.LastIncludedIndex, log.LastIncludedTerm,
+		len(log.Entries), log.Entries)
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	mu                  sync.Mutex // Lock to protect shared access to this peer's state
+	snapShotPersistCond *sync.Cond // Condition variable to wait for state changes
+	// snapShotPersistCh chan
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
@@ -88,9 +164,9 @@ type Raft struct {
 	state State // 不同的服务器状态
 
 	/* 持久性状态 */
-	currentTerm int       // 服务器已知最新的任期
-	votedFor    int       /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
-	log         []RaftLog /* 日志条目 <command,term> + index */
+	currentTerm int      // 服务器已知最新的任期
+	votedFor    int      /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
+	log         RaftLogs /* 日志条目 <command,term> + index */
 
 	/* 易失性状态 */
 	commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
@@ -101,8 +177,9 @@ type Raft struct {
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	resetTimerCh chan bool
-	applyCh      chan ApplyMsg // 用于提交日志条目
+	resetTimerCh  chan bool
+	applyCh       chan ApplyMsg    // 用于提交日志条目
+	signalApplyCh chan interface{} //
 
 	sendHeartBeatTimeOut time.Duration // 发送心跳时间
 	recvHeartBeatTimeOut time.Duration // 接受心跳时间
@@ -134,12 +211,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
+	rf.snapShotPersistCond = sync.NewCond(&rf.mu)
 	rf.readPersist(persister.ReadRaftState())
+
+	// rf.persister.ReadSnapshot()
 
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.applyCh = applyCh
-
+	rf.signalApplyCh = make(chan interface{})
 	/* log for debug */
 	// lf, err := os.OpenFile(time.Now().Format(time.RFC3339)+strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
 	// if err != nil {
@@ -150,6 +230,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.RoutineCntDebug(2)
+	go rf.ApplyCommittedMsgs()
 	return rf
 }
 
@@ -177,10 +258,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		isLeader = rf.state == Leader
 		if isLeader {
-			log_entry := RaftLog{command, term}
-			rf.log = append(rf.log, log_entry)
-			// rf.logger.Info(rf.log)
-			index = len(rf.log) - 1
+			log_entry := RaftLog{command, term, rf.log.Len()}
+			rf.log.Entries = append(rf.log.Entries, log_entry)
+			index = log_entry.LogicIndex
 			rf.DebugWithLock("start log: %v in index(%d)", log_entry, index)
 			rf.matchIndex[rf.me] = index
 			rf.persist()
@@ -192,7 +272,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 func (rf *Raft) RoutineCntDebug(internal int) {
 	for {
-		log.Printf("S[%d] go rountine count: %d, total: %d",
+		log.Printf("S[%d] go routine count: %d, total: %d",
 			rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
 		time.Sleep(time.Duration(internal) * time.Second)
 	}

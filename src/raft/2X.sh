@@ -12,7 +12,7 @@ for ((i = 0; i < $3; i++)); do
 
 	if test $? -ne 0; then
 		echo "batch $i failed"
-		# ./debug >$1-format.err
+		./debug >$1-format.err
 		exit 1
 	else
 		echo "batch $i ok"

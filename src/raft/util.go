@@ -30,6 +30,13 @@ func (rf *Raft) DebugWithLock(format string, a ...interface{}) {
 	log.Printf("T[%03d] S[%03d] I[%s] "+format, alist...)
 }
 
+func (rf *Raft) DebugUnsafe(format string, a ...interface{}) {
+	alist := []interface{}{rf.me}
+	alist = append(alist, a...)
+
+	log.Printf("T[XXX] S[%03d] I[XXX]"+format, alist...)
+}
+
 func (rf *Raft) Debug(format string, a ...interface{}) {
 	rf.mu.Lock()
 	defer rf.mu.Lock()

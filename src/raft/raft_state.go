@@ -6,7 +6,7 @@ type State int
 
 const (
 	Leader State = iota
-	Candidater
+	Candidate
 	Follower
 )
 
@@ -14,8 +14,8 @@ func (s State) String() string {
 	switch s {
 	case Leader:
 		return "LEADER"
-	case Candidater:
-		return "CANDIDATER"
+	case Candidate:
+		return "CANDIDATE"
 	case Follower:
 		return "FOLLOWER"
 	default:
@@ -62,8 +62,8 @@ func (rf *Raft) ResetToFollowerWithLock(reason string) {
 	switch rf.state {
 	case Leader:
 		rf.DebugWithLock("LEADER --> FOLLOWER!")
-	case Candidater:
-		rf.DebugWithLock("CANDIDATER --> FOLLOWER!")
+	case Candidate:
+		rf.DebugWithLock("CANDIDATE --> FOLLOWER!")
 	case Follower:
 		rf.DebugWithLock("FOLLLOWER --> FOLLOWER!")
 	default:
@@ -73,15 +73,15 @@ func (rf *Raft) ResetToFollowerWithLock(reason string) {
 }
 
 func (rf *Raft) TurnToLeaderWithLock() {
-	/* assert rf.state = Candidater */
-	rf.DebugWithLock("CANDIDATER --> LEADER!")
+	/* assert rf.state = Candidate */
+	rf.DebugWithLock("CANDIDATE --> LEADER!")
 	rf.DebugWithLock("TurnToLeaderWithLock with log: %v", rf.log)
 
 	rf.state = Leader
 	rf.votedFor = -1
 	// update nextIndex[]
 	for i := 0; i < len(rf.peers); i++ {
-		rf.nextIndex[i] = len(rf.log)
+		rf.nextIndex[i] = rf.log.Len()
 	}
 	// update matchIndex[]
 	for i := 0; i < len(rf.peers); i++ {

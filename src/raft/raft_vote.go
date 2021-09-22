@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"math/rand"
+
 	// "runtime"
 	"sync/atomic"
 	"time"
@@ -74,12 +75,12 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 		rf.mu.Unlock()
 		return
 	}
-	rf.state = Candidater
+	rf.state = Candidate
 	rf.currentTerm++    /* 自增当前的任期号 */
 	rf.votedFor = rf.me /* 投票给自己 */
 	rf.persist()
 
-	oldState := rf.state      /* Candidater */
+	oldState := rf.state      /* Candidate */
 	oldTerm := rf.currentTerm /* 记录当前任期号 */
 	voteCnt++
 
@@ -107,13 +108,13 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 				rf.mu.Unlock()
 				return
 			}
-			logLen := len(rf.log)
+			logLen := rf.log.Len()
 			reply := &RequestVoteReply{}
 			args := &RequestVoteArgs{
 				Term:         rf.currentTerm,
 				CandidateId:  rf.me,
 				LastLogIndex: logLen - 1,
-				LastLogTerm:  rf.log[logLen-1].Term,
+				LastLogTerm:  rf.log.TermOf((logLen - 1)),
 			}
 			rf.DebugWithLock("sendRequestVote to S[%d]", i)
 			rf.mu.Unlock()
@@ -275,16 +276,19 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 /* 参选者的日志是否更加新？ */
 func (rf *Raft) ArelogNewerWithLock(args *RequestVoteArgs) (bool, string) {
 	/* 先比任期 */
-	lastLogTerm := rf.log[len(rf.log)-1].Term
+	/* assert(rf.log.Len()>0) */
+	lastLogTerm := rf.log.TermOf((rf.log.Len() - 1))
 	if args.LastLogTerm < lastLogTerm {
-		return false, fmt.Sprintf("S[%d] LastLogTerm T[%d] < S[%d] LastLogTerm T[%d]", args.CandidateId, args.LastLogTerm, rf.me, lastLogTerm)
+		return false, fmt.Sprintf("S[%d] LastLogTerm T[%d] < S[%d] LastLogTerm T[%d]",
+			args.CandidateId, args.LastLogTerm, rf.me, lastLogTerm)
 	}
 
 	/* 任期相同 比最后日志的坐标 */
-	lastLogIndex := len(rf.log) - 1
+	lastLogIndex := rf.log.Len() - 1
 	if args.LastLogTerm == lastLogTerm &&
 		args.LastLogIndex < lastLogIndex {
-		return false, fmt.Sprintf("S[%d] LastLogIndex T[%d] < S[%d] LastLogIndex T[%d]", args.CandidateId, args.LastLogIndex, rf.me, lastLogIndex)
+		return false, fmt.Sprintf("S[%d] LastLogIndex T[%d] < S[%d] LastLogIndex T[%d]",
+			args.CandidateId, args.LastLogIndex, rf.me, lastLogIndex)
 	}
 	return true, ""
 }
