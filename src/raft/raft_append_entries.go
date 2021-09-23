@@ -29,10 +29,6 @@ type AppendEntriesReply struct {
 func (rf *Raft) HeartBeatTicker() {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.Debug("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.Debug("[%d] %s: end", rf.me, Trace(pc))
-	// }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -60,14 +56,9 @@ func (rf *Raft) HeartBeatTicker() {
 /* 领导者服务器心跳超时的回调函数 */
 func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.CancelFunc) {
 	var heartBeatAckCnt int
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-	// }
 
 	changed, oldTerm, oldState := rf.AreStateOrTermChange(-1, Leader)
 	if changed {
-		// rf.Debug("HeartBeatTimeOutCallBack: state or term change")
 		cancel()
 		return
 	}
@@ -82,17 +73,11 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			atomic.AddInt32(&rf.routineCnt, 1)
 			defer atomic.AddInt32(&rf.routineCnt, -1)
 
-			// if pc, _, _, ok := runtime.Caller(0); ok {
-			// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-			// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-			// }
-
 			for !rf.killed() {
 				rf.mu.Lock()
 
 				/* 领导者状态已经发生改变 */
 				if changed, _, _ = rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-					// rf.Debug("HeartBeatTimeOutSendAppendEntriesRPC: state or term change")
 					cancel()
 					rf.mu.Unlock()
 					return
@@ -130,16 +115,12 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 						LeaderId:     rf.me,
 						LeaderCommit: rf.commitIndex,
 					}
-					// if logicPrevLogIndex == rf.log.LastIncludedIndex {
-					// 	args.PrevLogIndex = rf.log.LastIncludedIndex
-					// 	args.PrevLogTerm = rf.log.LastIncludedTerm
-					// } else {
+
 					args.PrevLogIndex = logicPrevLogIndex
 					args.PrevLogTerm = rf.log.TermOf(logicPrevLogIndex)
-					// }
-
 					args.Entries = make([]RaftLog, len(rf.log.Entries[rf.log.getEntryIndex(rf.nextIndex[i]):]))
 					copy(args.Entries, rf.log.Entries[rf.log.getEntryIndex(rf.nextIndex[i]):])
+
 					rf.DebugWithLock("want to send logs(%d,%d):%v to S[%d]",
 						rf.log.getEntryIndex(rf.nextIndex[i]),
 						rf.log.getEntryIndex(rf.nextIndex[i])+len(args.Entries),
@@ -149,12 +130,10 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					/* ==========UNLOCK SPACE========= */
 					/* [TODO] 出错多少次退出？ */
 					if ok := rf.sendAppendEntries(i, args, reply); !ok {
-						// rf.Debug("sendAppendEntries to [%d]: not ok", rf.me, i)
 						return
 					}
 					/* =================== */
 					if rf.HandleApplyEntries(i, oldTerm, oldState, &heartBeatAckCnt, ctx, cancel, reply) {
-						// rf.DebugWithLock("HandleApplyEntries over")
 						return
 					}
 				}
@@ -172,22 +151,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
 
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-	// }
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	/* 设置返回值为 follower 的任期 */
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
-		/* 1.  如果领导者的任期 小于 接收者的当前任期 返回假 */
+		/* 1. 如果领导者的任期 小于 接收者的当前任期 返回假 */
 		reply.Success = false
 		return
 	} else if args.Term > rf.currentTerm {
-		/* 如果领导者的任期比自己的高，更新自己任期 */
+		/* 2. 如果领导者的任期比自己的高，更新自己任期 */
 		rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 		rf.votedFor = -1
 		rf.currentTerm = args.Term
@@ -245,7 +219,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		i := args.PrevLogIndex - 1
 		/* 1> 过了日志总长度 return 也许匹配到 总长度-1 */
-		for ; i >= rf.log.LastIncludedIndex+1 && i >= 0; i-- {
+		for ; i >= rf.log.LastIncludedIndex+1; i-- {
 			/* 找到恰好不是该 term 的位置 */
 			if rf.log.TermOf(args.PrevLogIndex) != rf.log.TermOf((i)) {
 				reply.MayMatchIndex = i
@@ -302,32 +276,33 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
+	if rf.killed() {
+		return
+	}
+
+	rf.mu.Lock()
+	/* 如果我们有快照的话？ */
+	if rf.log.LastIncludedIndex != -1 {
+		msg := &ApplyMsg{
+			CommandValid:  false,
+			SnapshotValid: true,
+			Snapshot:      rf.persister.ReadSnapshot(),
+			SnapshotTerm:  rf.log.LastIncludedTerm,
+			SnapshotIndex: rf.log.LastIncludedIndex,
+		}
+		rf.applyCh <- *msg
+		rf.snapShotPersistCond.Wait()
+	}
+	rf.mu.Unlock()
+
 	for !rf.killed() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()
 		rf.DebugWithLock("can apply logs wit lock")
-		/* bug lastApplied=0 */
-		var beginIndex int
-		if rf.lastApplied < rf.log.LastIncludedIndex {
-			/* 安装快照到service */
-			beginIndex = rf.log.LastIncludedIndex + 1
-			msg := ApplyMsg{
-				CommandValid:  false,
-				SnapshotValid: true,
-				Snapshot:      rf.persister.ReadSnapshot(),
-				SnapshotTerm:  rf.log.LastIncludedTerm,
-				SnapshotIndex: rf.log.LastIncludedIndex,
-			}
-			rf.mu.Unlock()
-			rf.applyCh <- msg
-			rf.mu.Lock()
-		} else {
-			beginIndex = rf.lastApplied + 1
-		}
 
-		for i := beginIndex; i <= rf.commitIndex; i++ {
+		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 			if rf.log.isIndexInSnapShot(i) {
-				rf.DebugWithLock("i=%v rf.log=%+v", i, rf.log)
+				rf.FatalWithLock("[BUG] i=%v rf.log=%+v", i, rf.log)
 				break
 			}
 			msg := ApplyMsg{
@@ -345,18 +320,18 @@ func (rf *Raft) ApplyCommittedMsgs() {
 	}
 }
 
-func (rf *Raft) handleApplyEntriesImpl(i int, oldTerm int, oldState State,
+func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState State,
 	heartBeatAckCnt *int, ctx context.Context, cancel context.CancelFunc,
 	reply *AppendEntriesReply, needRetry bool /* need_apply bool */) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 领导者状态已经发生改变 */
 	if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
-		rf.DebugWithLock("handleApplyEntriesImpl: state or term change")
+		rf.DebugWithLock("handleApplyEntriesOrInstallSnapShot: state or term change")
 		cancel()
 		return true
 	}
-	rf.DebugWithLock("reply:%#v", reply)
+	rf.DebugWithLock("reply:%+v", reply)
 	if reply.Success {
 		*heartBeatAckCnt++
 		rf.DebugWithLock("get heartBeatAck from S[%d], now it get %d Ack", i, *heartBeatAckCnt)
@@ -421,5 +396,5 @@ func (rf *Raft) handleApplyEntriesImpl(i int, oldTerm int, oldState State,
 func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 	heartBeatAckCnt *int, ctx context.Context, cancel context.CancelFunc,
 	reply *AppendEntriesReply) bool {
-	return rf.handleApplyEntriesImpl(i, oldTerm, oldState, heartBeatAckCnt, ctx, cancel, reply, true)
+	return rf.handleApplyEntriesOrInstallSnapShot(i, oldTerm, oldState, heartBeatAckCnt, ctx, cancel, reply, true)
 }

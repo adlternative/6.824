@@ -95,11 +95,12 @@ func (logs *RaftLogs) isIndexInSnapShot(index int) bool {
 	return index <= logs.LastIncludedIndex && index >= 0
 }
 
-func (logs *RaftLogs) at(index int) /* ( */ *RaftLog /* , error) */ {
-	// if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
-	// 	return nil, fmt.Errorf("index %d out of range (%d,%d)",
-	// 		index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
-	// }
+func (logs *RaftLogs) isIndexInLog(index int) bool {
+	return logs.getEntryIndex(index) < logs.Len() &&
+		logs.getEntryIndex(index) >= 0
+}
+
+func (logs *RaftLogs) at(index int) *RaftLog {
 	if logs.LastIncludedIndex == index {
 		dummyLogEntry := &RaftLog{
 			nil,
@@ -108,32 +109,15 @@ func (logs *RaftLogs) at(index int) /* ( */ *RaftLog /* , error) */ {
 		}
 		return dummyLogEntry
 	}
-	return &logs.Entries[logs.getEntryIndex(index)] /* , nil */
+	return &logs.Entries[logs.getEntryIndex(index)]
 }
 
 func (logs *RaftLogs) TermOf(index int) int {
-	// if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
-	// 	return nil, fmt.Errorf("index %d out of range (%d,%d)",
-	// 		index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
-	// }
 	if logs.LastIncludedIndex == index {
 		return logs.LastIncludedTerm
 	}
-	return logs.Entries[logs.getEntryIndex(index)].Term /* , nil */
+	return logs.Entries[logs.getEntryIndex(index)].Term
 }
-
-// func (logs *RaftLogs) getEntryIndexWithCheck(index int) (int, error) {
-
-// 	if logs.LastIncludedIndex == -1 {
-// 		return index, nil
-// 	}
-
-// 	if index <= logs.LastIncludedIndex || index >= 1+len(logs.Entries)+logs.LastIncludedIndex {
-// 		return -1, fmt.Errorf("index %d out of range (%d,%d)",
-// 			index, logs.LastIncludedIndex, len(logs.Entries)+logs.LastIncludedIndex+1)
-// 	}
-// 	return index - logs.LastIncludedIndex, nil
-// }
 
 func (log *RaftLog) String() string {
 	val, ok := log.Command.(int)
@@ -144,7 +128,7 @@ func (log *RaftLog) String() string {
 }
 
 func (log *RaftLogs) String() string {
-	return fmt.Sprintf("lastIncludedEntry:{index %d,term %d} log(%d):%v",
+	return fmt.Sprintf("lastIncludedEntry:{index %d,term %d} log(%d):%+v",
 		log.LastIncludedIndex, log.LastIncludedTerm,
 		len(log.Entries), log.Entries)
 }
@@ -153,38 +137,41 @@ func (log *RaftLogs) String() string {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu                  sync.Mutex // Lock to protect shared access to this peer's state
-	snapShotPersistCond *sync.Cond // Condition variable to wait for state changes
-	// snapShotPersistCh chan
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-
-	state State // 不同的服务器状态
+	peers []*labrpc.ClientEnd // RPC end points of all peers
+	me    int                 // this peer's index into peers[]
 
 	/* 持久性状态 */
 	currentTerm int      // 服务器已知最新的任期
 	votedFor    int      /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
 	log         RaftLogs /* 日志条目 <command,term> + index */
+	/* 持久化层 */
+	persister *Persister // Object to hold this peer's persisted state
 
 	/* 易失性状态 */
-	commitIndex int //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
-	lastApplied int //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	commitIndex int   //	已知已提交的最高的日志条目的索引（初始值为0，单调递增）
+	lastApplied int   //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
+	state       State // 不同的服务器身份 L,F,C
+	dead        int32 // set by Kill()
 
 	/* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
 	nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
-	/* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	resetTimerCh  chan bool
-	applyCh       chan ApplyMsg    // 用于提交日志条目
-	signalApplyCh chan interface{} //
+	/* 协程间同步与通信 */
+	mu                  sync.Mutex       // Lock to protect shared access to this peer's state
+	resetTimerCh        chan bool        /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
+	applyCh             chan ApplyMsg    // 用于提交日志条目
+	signalApplyCh       chan interface{} // 用来通知 applyCh 可以提交日志条目了
+	snapShotPersistCond *sync.Cond       // Condition variable to wait for state changes
 
-	sendHeartBeatTimeOut time.Duration // 发送心跳时间
-	recvHeartBeatTimeOut time.Duration // 接受心跳时间
+	/* 超时管理 */
+	sendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
+	recvHeartBeatTimeOut time.Duration // 接受心跳超时时间--用于选举超时
+
+	/* 日志 别用 */
 	// logger               *logger.Logger
 
+	/* 协程数量统计 (之前有时接收端死锁了发送端可能飙到8k 其实应当重试) */
 	routineCnt int32 // 主动开的 go协程数量统计
 }
 
@@ -212,24 +199,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
 	rf.snapShotPersistCond = sync.NewCond(&rf.mu)
-	rf.readPersist(persister.ReadRaftState())
 
-	// rf.persister.ReadSnapshot()
+	/* 恢复日志 */
+	rf.readPersist(persister.ReadRaftState())
 
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.applyCh = applyCh
 	rf.signalApplyCh = make(chan interface{})
-	/* log for debug */
-	// lf, err := os.OpenFile(time.Now().Format(time.RFC3339)+strconv.Itoa(rf.me)+".log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
-	// if err != nil {
-	// 	log.Fatalf("Failed to open log file: %v", err)
-	// }
-	// rf.logger = logger.Init("raftlog", false, true, lf)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.RoutineCntDebug(2)
+	/* 恢复快照 以及 apply */
 	go rf.ApplyCommittedMsgs()
 	return rf
 }
@@ -258,10 +240,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		isLeader = rf.state == Leader
 		if isLeader {
-			log_entry := RaftLog{command, term, rf.log.Len()}
-			rf.log.Entries = append(rf.log.Entries, log_entry)
-			index = log_entry.LogicIndex
-			rf.DebugWithLock("start log: %v in index(%d)", log_entry, index)
+			logEntry := RaftLog{command, term, rf.log.Len()}
+			rf.log.Entries = append(rf.log.Entries, logEntry)
+			index = logEntry.LogicIndex
+			rf.DebugWithLock("start log: %v in index(%d)", logEntry, index)
 			rf.matchIndex[rf.me] = index
 			rf.persist()
 		}

@@ -44,7 +44,6 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 
-	// Your code here (2C).
 	var logs RaftLogs
 	var currentTerm, votedFor int
 
@@ -58,5 +57,9 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.log = logs
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
+		if rf.log.LastIncludedIndex != -1 {
+			rf.commitIndex = rf.log.LastIncludedIndex
+			rf.lastApplied = rf.log.LastIncludedIndex
+		}
 	}
 }

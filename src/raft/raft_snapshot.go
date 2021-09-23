@@ -30,7 +30,7 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 func (rf *Raft) HandleInstallSnapshot(i int, oldTerm int, oldState State,
 	heartBeatAckCnt *int, ctx context.Context,
 	cancel context.CancelFunc, reply *InstallSnapshotReply) bool {
-	return rf.handleApplyEntriesImpl(i, oldTerm, oldState, heartBeatAckCnt, ctx, cancel, (*AppendEntriesReply)(reply), false)
+	return rf.handleApplyEntriesOrInstallSnapShot(i, oldTerm, oldState, heartBeatAckCnt, ctx, cancel, (*AppendEntriesReply)(reply), false)
 }
 
 /* InstallSnapshot  */
@@ -66,24 +66,25 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	/* ASSERT( rf.state == FOLLOWER) */
 
 	/* 发来的快照旧 */
-	if args.LastIncludedIndex < rf.log.LastIncludedIndex {
+	if args.LastIncludedIndex < rf.log.LastIncludedIndex ||
+		args.LastIncludedIndex < rf.commitIndex {
 		reply.Success = false
 		return
 	}
 
 	/* APPLY TO SERVE*/
-	go func() {
-		rf.applyCh <- ApplyMsg{
-			CommandValid:  false,
-			SnapshotValid: true,
-			Snapshot:      args.Data,
-			SnapshotTerm:  args.LastIncludedTerm,
-			SnapshotIndex: args.LastIncludedIndex,
-		}
-	}()
-
+	// go func() {
+	rf.applyCh <- ApplyMsg{
+		CommandValid:  false,
+		SnapshotValid: true,
+		Snapshot:      args.Data,
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+	}
+	// }()
 	rf.snapShotPersistCond.Wait()
-	reply.MayMatchIndex = args.LastIncludedIndex /* 移动到快照的最后坐标即可 */
+	/* 移动到快照的最后坐标即可 */
+	reply.MayMatchIndex = args.LastIncludedIndex
 	if rf.log.LastIncludedIndex == args.LastIncludedIndex &&
 		rf.log.LastIncludedTerm == args.LastIncludedTerm {
 		/* 条件变量 等待持久化完成的信号*/
@@ -104,28 +105,34 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.snapShotPersistCond.Signal()
+
 	rf.DebugWithLock("CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
+
 	/* 如果有新的提交日志则不安装本次的快照 */
-	if lastIncludedIndex < rf.commitIndex {
-		rf.DebugWithLock("lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
-		rf.snapShotPersistCond.Signal()
+	if lastIncludedIndex < 0 {
+		rf.FatalWithLock("[BUG] CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
+		return false
+	} else if lastIncludedIndex <= rf.log.LastIncludedIndex {
+		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.log.LastIncludedIndex=%d 本次的快照不够新", lastIncludedIndex, rf.log.LastIncludedIndex)
+		return false
+	} else if lastIncludedIndex < rf.commitIndex {
+		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
+		return false
+	} else if lastIncludedIndex < rf.log.Len() &&
+		lastIncludedTerm == rf.log.TermOf((lastIncludedIndex)) {
+		/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
+		则保留其后的日志条目并进行回复*/
+		rf.DebugWithLock("[reject IS] follower seems have more log than this snapshot. lastIncludedTerm=%d", lastIncludedTerm)
 		return false
 	}
-
-	/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
-	则保留其后的日志条目并进行回复*/
-	if lastIncludedIndex < rf.log.Len() &&
-		lastIncludedTerm == rf.log.TermOf((lastIncludedIndex)) {
-		rf.DebugWithLock("follower seems have something more than this snapshot, just return!")
-	} else {
-		rf.commitIndex = lastIncludedIndex
-		rf.lastApplied = lastIncludedIndex
-		rf.log.LastIncludedIndex = lastIncludedIndex
-		rf.log.LastIncludedTerm = lastIncludedTerm
-		rf.log.Entries = rf.log.Entries[:0]
-		rf.persistStateAndSnapShot(snapshot)
-	}
-	rf.snapShotPersistCond.Signal()
+	/* 持久化快照 */
+	rf.commitIndex = lastIncludedIndex
+	rf.lastApplied = lastIncludedIndex
+	rf.log.LastIncludedIndex = lastIncludedIndex
+	rf.log.LastIncludedTerm = lastIncludedTerm
+	rf.log.Entries = rf.log.Entries[:0]
+	rf.persistStateAndSnapShot(snapshot)
 	return true
 }
 
@@ -150,7 +157,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.DebugWithLock("index=%d < rf.log.LastIncludedIndex=%d we already have a bigger snapshot", index, rf.log.LastIncludedIndex)
 		return
 	}
-
 	rf.DebugWithLock("Snapshot index=%d rf.log.getEntryIndex(index)=%d rf.log=%v", index, rf.log.getEntryIndex(index), rf.log)
 
 	// /* 丢弃 index 之前旧的日志 */
