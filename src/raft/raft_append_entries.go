@@ -307,29 +307,29 @@ func (rf *Raft) ApplyCommittedMsgs() {
 		rf.mu.Lock()
 		rf.DebugWithLock("can apply logs wit lock")
 		/* bug lastApplied=0 */
-		// if rf.log.isIndexInSnapShot(rf.lastApplied + 1) {
-		// 	rf.DebugWithLock("rf.log.lastIncludedIndex=%d lastApplied=%d is in snapshot",
-		// 		rf.log.LastIncludedIndex, rf.lastApplied)
-		// 	rf.mu.Unlock()
-		// 	continue
-		// }
-
-		// for i := rf.lastApplied + 1; i <= rf.log.LastIncludedIndex; i++ {
-		// }
-		/* 安装快照到service */
-		rf.mu.Unlock()
-
-		msg := ApplyMsg{
-			CommandValid:  false,
-			SnapshotValid: true,
-			Snapshot:      rf.persister.ReadSnapshot(),
-			SnapshotTerm:  rf.log.LastIncludedIndex,
-			SnapshotIndex: rf.log.LastIncludedTerm,
+		var beginIndex int
+		if rf.lastApplied < rf.log.LastIncludedIndex {
+			/* 安装快照到service */
+			beginIndex = rf.log.LastIncludedIndex + 1
+			msg := ApplyMsg{
+				CommandValid:  false,
+				SnapshotValid: true,
+				Snapshot:      rf.persister.ReadSnapshot(),
+				SnapshotTerm:  rf.log.LastIncludedTerm,
+				SnapshotIndex: rf.log.LastIncludedIndex,
+			}
+			rf.mu.Unlock()
+			rf.applyCh <- msg
+			rf.mu.Lock()
+		} else {
+			beginIndex = rf.lastApplied + 1
 		}
-		rf.applyCh <- msg
-		rf.mu.Lock()
 
-		for i := rf.log.LastIncludedIndex + 1; i <= rf.commitIndex; i++ {
+		for i := beginIndex; i <= rf.commitIndex; i++ {
+			if rf.log.isIndexInSnapShot(i) {
+				rf.DebugWithLock("i=%v rf.log=%+v", i, rf.log)
+				break
+			}
 			msg := ApplyMsg{
 				CommandValid:  true,
 				Command:       rf.log.at(i).Command,

@@ -37,10 +37,10 @@ func (rf *Raft) HandleInstallSnapshot(i int, oldTerm int, oldState State,
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	atomic.AddInt32(&rf.routineCnt, 1)
 	defer atomic.AddInt32(&rf.routineCnt, -1)
-	rf.DebugWithLock("GET T[%d] S[%d] IS args:%#v", args.Term, args.LeaderId, args)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.DebugWithLock("GET T[%d] S[%d] IS args:%#v", args.Term, args.LeaderId, args)
 
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
@@ -84,7 +84,8 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	rf.snapShotPersistCond.Wait()
 	reply.MayMatchIndex = args.LastIncludedIndex /* 移动到快照的最后坐标即可 */
-	if rf.log.LastIncludedIndex == args.LastIncludedIndex {
+	if rf.log.LastIncludedIndex == args.LastIncludedIndex &&
+		rf.log.LastIncludedTerm == args.LastIncludedTerm {
 		/* 条件变量 等待持久化完成的信号*/
 		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
