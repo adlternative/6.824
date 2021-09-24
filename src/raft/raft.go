@@ -158,12 +158,12 @@ type Raft struct {
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 协程间同步与通信 */
-	mu                  sync.Mutex       // Lock to protect shared access to this peer's state
-	resetTimerCh        chan bool        /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	applyCh             chan ApplyMsg    // 用于提交日志条目
-	signalApplyCh       chan interface{} // 用来通知 applyCh 可以提交日志条目了
-	snapShotPersistCond *sync.Cond       // Condition variable to wait for state changes
-
+	mu                    sync.Mutex       // Lock to protect shared access to this peer's state
+	resetTimerCh          chan bool        /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
+	applyCh               chan ApplyMsg    // 用于提交日志条目
+	signalApplyCh         chan interface{} // 用来通知 applyCh 可以提交日志条目了
+	snapShotPersistCond   *sync.Cond       // Condition variable to wait for state changes
+	snapShotMayMatchIndex int              /* 用一个共享变量进行通信吧 */
 	/* 超时管理 */
 	sendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
 	recvHeartBeatTimeOut time.Duration // 接受心跳超时时间--用于选举超时
@@ -210,7 +210,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-	go rf.RoutineCntDebug(2)
+	// go rf.RoutineCntDebug(2)
 	/* 恢复快照 以及 apply */
 	go rf.ApplyCommittedMsgs()
 	return rf

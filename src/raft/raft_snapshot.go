@@ -3,7 +3,6 @@ package raft
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 )
 
 type InstallSnapshotArgs struct {
@@ -35,9 +34,6 @@ func (rf *Raft) HandleInstallSnapshot(i int, oldTerm int, oldState State,
 
 /* InstallSnapshot  */
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	atomic.AddInt32(&rf.routineCnt, 1)
-	defer atomic.AddInt32(&rf.routineCnt, -1)
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.DebugWithLock("GET T[%d] S[%d] IS args:%#v", args.Term, args.LeaderId, args)
@@ -64,16 +60,17 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 
 	/* ASSERT( rf.state == FOLLOWER) */
+	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 
 	/* 发来的快照旧 */
 	if args.LastIncludedIndex < rf.log.LastIncludedIndex ||
 		args.LastIncludedIndex < rf.commitIndex {
+		reply.MayMatchIndex = rf.commitIndex
 		reply.Success = false
 		return
 	}
 
 	/* APPLY TO SERVE*/
-	// go func() {
 	rf.applyCh <- ApplyMsg{
 		CommandValid:  false,
 		SnapshotValid: true,
@@ -81,16 +78,15 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotTerm:  args.LastIncludedTerm,
 		SnapshotIndex: args.LastIncludedIndex,
 	}
-	// }()
 	rf.snapShotPersistCond.Wait()
 	/* 移动到快照的最后坐标即可 */
-	reply.MayMatchIndex = args.LastIncludedIndex
 	if rf.log.LastIncludedIndex == args.LastIncludedIndex &&
 		rf.log.LastIncludedTerm == args.LastIncludedTerm {
 		/* 条件变量 等待持久化完成的信号*/
-		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+		reply.MayMatchIndex = args.LastIncludedIndex
 		reply.Success = true
 	} else {
+		reply.MayMatchIndex = rf.snapShotMayMatchIndex
 		reply.Success = false
 	}
 }
@@ -115,15 +111,18 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		return false
 	} else if lastIncludedIndex <= rf.log.LastIncludedIndex {
 		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.log.LastIncludedIndex=%d 本次的快照不够新", lastIncludedIndex, rf.log.LastIncludedIndex)
+		rf.snapShotMayMatchIndex = rf.commitIndex
 		return false
 	} else if lastIncludedIndex < rf.commitIndex {
 		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
+		rf.snapShotMayMatchIndex = rf.commitIndex
 		return false
 	} else if lastIncludedIndex < rf.log.Len() &&
-		lastIncludedTerm == rf.log.TermOf((lastIncludedIndex)) {
+		lastIncludedTerm == rf.log.TermOf(lastIncludedIndex) {
 		/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
 		则保留其后的日志条目并进行回复*/
-		rf.DebugWithLock("[reject IS] follower seems have more log than this snapshot. lastIncludedTerm=%d", lastIncludedTerm)
+		rf.DebugWithLock("[reject IS] follower seems have more log than this snapshot. lastIncludedIndex=%d rf.log.Len()=%d", lastIncludedTerm, rf.log.Len())
+		rf.snapShotMayMatchIndex = lastIncludedIndex
 		return false
 	}
 	/* 持久化快照 */

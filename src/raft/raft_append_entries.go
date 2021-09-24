@@ -98,6 +98,8 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 						Data:              rf.persister.ReadSnapshot(),
 					}
 
+					rf.DebugWithLock("want to send snapshot to S[%d], args=%+v", i, args)
+
 					rf.mu.Unlock()
 					/* ==========UNLOCK SPACE========= */
 					if ok := rf.sendInstallSnapshot(i, args, reply); !ok {
@@ -178,6 +180,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	/* ASSERT( rf.state == FOLLOWER) */
+	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 
 	/*  即该条目的任期在prevLogIndex上能和prevLogTerm匹配上*/
 	/* PrevLogIndex > 最后一条日志的坐标 */
@@ -268,7 +271,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.DebugWithLock("can apply logs")
 			go func() { rf.signalApplyCh <- interface{}(nil) }()
 		}
-		rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
 		reply.Success = true
 		reply.MayMatchIndex = rf.log.Len() - 1
 	}
@@ -322,7 +324,7 @@ func (rf *Raft) ApplyCommittedMsgs() {
 
 func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState State,
 	heartBeatAckCnt *int, ctx context.Context, cancel context.CancelFunc,
-	reply *AppendEntriesReply, needRetry bool /* need_apply bool */) bool {
+	reply *AppendEntriesReply, needRetry bool) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 领导者状态已经发生改变 */
@@ -331,7 +333,7 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 		cancel()
 		return true
 	}
-	rf.DebugWithLock("reply:%+v", reply)
+	rf.DebugWithLock("i:%d reply:%+v", i, reply)
 	if reply.Success {
 		*heartBeatAckCnt++
 		rf.DebugWithLock("get heartBeatAck from S[%d], now it get %d Ack", i, *heartBeatAckCnt)
@@ -382,14 +384,9 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 		cancel()
 		return true
 	} else {
-		if needRetry {
-			/* 降低 nextIndex 并重试 */
-			rf.nextIndex[i] = reply.MayMatchIndex + 1
-			/* continue */
-			return false
-		} else {
-			return true
-		}
+		/* 降低 nextIndex*/
+		rf.nextIndex[i] = reply.MayMatchIndex + 1
+		return !needRetry
 	}
 }
 

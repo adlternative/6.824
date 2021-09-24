@@ -30,6 +30,7 @@ func (rf *Raft) AreStateOrTermChangeWithLock(oldTerm int, oldState State) (bool,
 	/* -1 表示 不关心 */
 	if (oldTerm != rf.currentTerm && oldTerm != -1) ||
 		(oldState != rf.state && oldState != -1) {
+		rf.DebugWithLock("AreStateOrTermChangeWithLock: oldTerm %v oldState %v rf.currentTerm %v rf.state %v", oldTerm, oldState, rf.currentTerm, rf.state)
 		return true, rf.currentTerm, rf.state
 	}
 
@@ -58,14 +59,14 @@ func (rf *Raft) ResetToFollower(reason string) {
 }
 
 func (rf *Raft) ResetToFollowerWithLock(reason string) {
-	rf.DebugWithLock("ResetToFollower with log: %v  reason: %s", rf.log, reason)
+	rf.DebugWithLock("ResetToFollower with the reason: %s", reason)
 	switch rf.state {
 	case Leader:
 		rf.DebugWithLock("LEADER --> FOLLOWER!")
 	case Candidate:
 		rf.DebugWithLock("CANDIDATE --> FOLLOWER!")
 	case Follower:
-		rf.DebugWithLock("FOLLLOWER --> FOLLOWER!")
+		rf.DebugWithLock("FOLLOWER --> FOLLOWER!")
 	default:
 		log.Fatalf("ERROR?!")
 	}
@@ -75,7 +76,7 @@ func (rf *Raft) ResetToFollowerWithLock(reason string) {
 func (rf *Raft) TurnToLeaderWithLock() {
 	/* assert rf.state = Candidate */
 	rf.DebugWithLock("CANDIDATE --> LEADER!")
-	rf.DebugWithLock("TurnToLeaderWithLock with log: %v", rf.log)
+	// rf.DebugWithLock("TurnToLeaderWithLock with log: %v", rf.log)
 
 	rf.state = Leader
 	rf.votedFor = -1
