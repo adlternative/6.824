@@ -156,10 +156,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	rf.DebugWithLock("args=%+v", args)
+
 	/* 设置返回值为 follower 的任期 */
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		/* 1. 如果领导者的任期 小于 接收者的当前任期 返回假 */
+		rf.DebugWithLock("[reject AE]: 领导者的任期 小于 接收者的当前任期", args)
 		reply.Success = false
 		return
 	} else if args.Term > rf.currentTerm {
@@ -180,7 +183,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	/* ASSERT( rf.state == FOLLOWER) */
-	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+	rf.resetTimer() /* 重置等待选举的超时定时器 */
 
 	/*  即该条目的任期在prevLogIndex上能和prevLogTerm匹配上*/
 	/* PrevLogIndex > 最后一条日志的坐标 */
@@ -338,13 +341,9 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 		*heartBeatAckCnt++
 		rf.DebugWithLock("get heartBeatAck from S[%d], now it get %d Ack", i, *heartBeatAckCnt)
 
+		/* 更新 matchIndex AND nextIndex */
 		rf.matchIndex[i] = reply.MayMatchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
-
-		/* 更新 matchIndex AND nextIndex */
-		if reply.MayMatchIndex < rf.log.LastIncludedIndex {
-			return false
-		}
 
 		if rf.nextIndex[i] > rf.log.Len() { //debug
 			cancel()
@@ -359,17 +358,18 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 				if rf.matchIndex[j] == rf.matchIndex[i] {
 					matchCnt++
 				}
-				/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
-				if matchCnt == len(rf.matchIndex)/2+1 &&
-					rf.matchIndex[i] > rf.commitIndex {
-					// updateCommitIndex()
-					rf.commitIndex = rf.matchIndex[i]
-					/* leader 可以应用日志了 */
-					if rf.commitIndex > rf.lastApplied {
-						rf.DebugWithLock("can apply logs")
-						go func() { rf.signalApplyCh <- interface{}(nil) }()
-					}
-					break
+			}
+			rf.DebugWithLock("matchCnt:%d", matchCnt)
+
+			/* 表示我们的日志已经保存在多个服务器上了 则可以提交了*/
+			if matchCnt == len(rf.matchIndex)/2+1 &&
+				rf.matchIndex[i] > rf.commitIndex {
+				// updateCommitIndex()
+				rf.commitIndex = rf.matchIndex[i]
+				/* leader 可以应用日志了 */
+				if rf.commitIndex > rf.lastApplied {
+					rf.DebugWithLock("can apply logs")
+					go func() { rf.signalApplyCh <- interface{}(nil) }()
 				}
 			}
 		}

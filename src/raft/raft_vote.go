@@ -167,14 +167,6 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 //
 /* 接收的服务器上处理 RequestVoteRPC  */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	atomic.AddInt32(&rf.routineCnt, 1)
-	defer atomic.AddInt32(&rf.routineCnt, -1)
-
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-	// }
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 设置返回任期 */
@@ -191,14 +183,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.ResetToFollowerWithLock(fmt.Sprintf("S[%d]任期 T[%d] 小于 S[%d] 任期 T[%d]", rf.me, rf.currentTerm, args.CandidateId, args.Term))
 			rf.currentTerm = args.Term
 
-			/* 如果任期相同且没有投给别人且更新就投 */
-
-			/* 没有投票给其他人 */
+			/* 日志更新 */
 			if ok, err_reason := rf.ArelogNewerWithLock(args); ok {
 				/* 日志新 */
 				rf.DebugWithLock("vote to S[%d]", args.CandidateId)
 				rf.votedFor = args.CandidateId
-				rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+				rf.resetTimer() /* 重置等待选举的超时定时器 */
 				reply.VoteGranted = true
 				rf.persist()
 			} else {
@@ -213,14 +203,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				assert args.Term == rf.currentTerm
 			*/
 			/* 如果任期相同且没有投给别人且更新就投 */
-			if /* rf.state != Leader && */ rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+			if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 				/* 没有投票给其他人 */
 				if ok, err_reason := rf.ArelogNewerWithLock(args); ok {
 					/* 日志新 */
 					rf.DebugWithLock("vote to S[%d]", args.CandidateId)
 					rf.ResetToFollowerWithLock("任期相同且没有投给别人且更新就投")
 					rf.votedFor = args.CandidateId
-					rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+					rf.resetTimer() /* 重置等待选举的超时定时器 */
 					reply.VoteGranted = true
 					rf.persist()
 				} else {

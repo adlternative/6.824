@@ -280,3 +280,8 @@ func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
 }
+
+func (rf *Raft) resetTimer() {
+	rf.DebugWithLock("reset Timer!")
+	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+}

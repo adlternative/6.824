@@ -60,7 +60,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 
 	/* ASSERT( rf.state == FOLLOWER) */
-	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+	rf.resetTimer() /* 重置等待选举的超时定时器 */
 
 	/* 发来的快照旧 */
 	if args.LastIncludedIndex < rf.log.LastIncludedIndex ||
