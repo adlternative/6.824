@@ -1,12 +1,21 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"fmt"
+	"log"
+	"math/big"
+	// _ "runtime/debug"
+	"sync/atomic"
 
+	"6.824/labrpc"
+)
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
+	servers   []*labrpc.ClientEnd
+	cmdSeq    int32
+	clientId  int64
+	curServer int
 	// You will have to modify this struct.
 }
 
@@ -20,6 +29,8 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	ck.curServer = (int)(nrand() % (int64)(len(ck.servers)))
+	ck.clientId = nrand()
 	// You'll have to add code here.
 	return ck
 }
@@ -37,23 +48,110 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	args := GetArgs{
+		Key:      key,
+		ClientId: ck.clientId,
+		Seq:      atomic.AddInt32(&ck.cmdSeq, 1),
+	}
+	reply := GetReply{}
 
-	// You will have to modify this function.
-	return ""
+	if ok := ck.servers[ck.curServer].Call("KVServer.Get", &args, &reply); ok {
+		if val, err := ck.handleGetReply(&reply); err == nil {
+			log.Printf("C[%d] Get v:%v", ck.clientId, val)
+			return val
+		} else {
+			// log.Printf("C[%d] Get error:%s", ck.clientId, err)
+		}
+	}
+
+	for {
+		i := (int)(nrand() % (int64)(len(ck.servers)))
+		if ck.curServer == i {
+			continue
+		}
+		ck.curServer = i
+
+		if ok := ck.servers[i].Call("KVServer.Get", &args, &reply); !ok {
+			continue
+		}
+
+		if val, err := ck.handleGetReply(&reply); err != nil {
+			// log.Printf("C[%d] Get error:%s", ck.clientId, err)
+			continue
+		} else {
+			log.Printf("C[%d] Get v:%v", ck.clientId, val)
+			return val
+		}
+	}
 }
 
-//
-// shared by Put and Append.
-//
-// you can send an RPC with code like this:
-// ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
-//
-// the types of args and reply (including whether they are pointers)
-// must match the declared types of the RPC handler function's
-// arguments. and reply must be passed as a pointer.
-//
+func (ck *Clerk) handleGetReply(reply *GetReply) (string, error) {
+
+	switch reply.Error {
+	case ErrWrongLeader:
+		return "", fmt.Errorf(ErrWrongLeader)
+		/* retry */
+	case ErrNoKey:
+		return "", nil
+	case OK:
+		return reply.Value, nil
+	default:
+		return "", fmt.Errorf("unknown error")
+	}
+}
+
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	args := PutAppendArgs{
+		Key:      key,
+		Value:    value,
+		Op:       op,
+		ClientId: ck.clientId,
+		Seq:      atomic.AddInt32(&ck.cmdSeq, 1),
+	}
+	reply := PutAppendReply{}
+	log.Printf("C[%d] first send args=%+v to %d", ck.clientId, args, ck.curServer)
+	if ok := ck.servers[ck.curServer].Call("KVServer.PutAppend", &args, &reply); ok {
+		if err := ck.handlePutAppendReply(&reply); err == nil {
+			log.Printf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
+			return
+		} else {
+			// log.Printf("C[%d] %s error:%s", ck.clientId, op, err)
+		}
+	}
+
+	for {
+		i := (int)(nrand() % (int64)(len(ck.servers)))
+		if ck.curServer == i {
+			continue
+		}
+		/* 选择新的服务器进行发送 */
+		ck.curServer = i
+		log.Printf("C[%d] reSend args=%+v to %d", ck.clientId, args, i)
+
+		if ok := ck.servers[ck.curServer].Call("KVServer.PutAppend", &args, &reply); !ok {
+			continue
+		}
+		if err := ck.handlePutAppendReply(&reply); err != nil {
+			// log.Printf("C[%d] %s error:%s", ck.clientId, op, err)
+			continue
+		} else {
+			log.Printf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
+			return
+		}
+	}
+}
+
+func (ck *Clerk) handlePutAppendReply(reply *PutAppendReply) error {
+	switch reply.Error {
+	case ErrWrongLeader:
+		/* do something */
+		return fmt.Errorf(ErrWrongLeader)
+	case OK:
+		return nil
+		/* do something */
+	default:
+		return fmt.Errorf("unknown error")
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

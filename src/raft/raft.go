@@ -120,11 +120,7 @@ func (logs *RaftLogs) TermOf(index int) int {
 }
 
 func (log *RaftLog) String() string {
-	val, ok := log.Command.(int)
-	if ok {
-		return fmt.Sprintf("{%d, %d}", val, log.Term)
-	}
-	return ""
+	return fmt.Sprintf("{logicIndex %d, term %d, command %v}", log.LogicIndex, log.Term, log.Command)
 }
 
 func (log *RaftLogs) String() string {
@@ -243,7 +239,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			logEntry := RaftLog{command, term, rf.log.Len()}
 			rf.log.Entries = append(rf.log.Entries, logEntry)
 			index = logEntry.LogicIndex
-			rf.DebugWithLock("start log: %v in index(%d)", logEntry, index)
+			rf.DebugWithLock("start log: %+v in index(%d)", logEntry, index)
 			rf.matchIndex[rf.me] = index
 			rf.persist()
 		}

@@ -316,6 +316,7 @@ func (rf *Raft) ApplyCommittedMsgs() {
 				CommandIndex:  i,
 				SnapshotValid: false,
 			}
+			rf.DebugWithLock("apply msg:%+v", msg)
 			rf.lastApplied = i
 			rf.mu.Unlock()
 			rf.applyCh <- msg
@@ -351,7 +352,8 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 				i, rf.nextIndex[i], rf.log.Len())
 		}
 
-		rf.DebugWithLock("rf.log=%v rf.matchIndex[i]=%d", rf.log, rf.matchIndex[i])
+		rf.DebugWithLock("rf.log=%+v matchIndex[%d]=%d commitIndex=%d", rf.log,
+			i, rf.matchIndex[i], rf.commitIndex)
 		if rf.log.TermOf(rf.matchIndex[i]) == rf.currentTerm {
 			matchCnt := 0
 			for j := 0; j < len(rf.matchIndex); j++ {

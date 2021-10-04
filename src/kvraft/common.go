@@ -13,21 +13,25 @@ type PutAppendArgs struct {
 	Key   string
 	Value string
 	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+
+	/* 客户端唯一标识符 */
+	ClientId int64
+	Seq      int32
 }
 
 type PutAppendReply struct {
-	Err Err
+	Error string
 }
 
 type GetArgs struct {
 	Key string
-	// You'll have to add definitions here.
+
+	/* 客户端唯一标识符 */
+	ClientId int64
+	Seq      int32
 }
 
 type GetReply struct {
-	Err   Err
+	Error   string
 	Value string
 }

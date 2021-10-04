@@ -49,6 +49,10 @@ func (rf *Raft) AreStateOrTermChange(oldTerm int, oldState State) (bool, int, St
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	return rf.GetStateWithLock()
+}
+
+func (rf *Raft) GetStateWithLock() (int, bool) {
 	return rf.currentTerm, rf.state == Leader
 }
 
