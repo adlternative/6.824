@@ -3,8 +3,9 @@ package kvraft
 import (
 	"crypto/rand"
 	"fmt"
-	"log"
 	"math/big"
+	"time"
+
 	// _ "runtime/debug"
 	"sync/atomic"
 
@@ -48,6 +49,11 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	begin := time.Now()
+	defer func() {
+		end := time.Now()
+		DPrintf("C[%d] Get %dms", ck.clientId, (end.Sub(begin)).Milliseconds())
+	}()
 	args := GetArgs{
 		Key:      key,
 		ClientId: ck.clientId,
@@ -57,10 +63,10 @@ func (ck *Clerk) Get(key string) string {
 
 	if ok := ck.servers[ck.curServer].Call("KVServer.Get", &args, &reply); ok {
 		if val, err := ck.handleGetReply(&reply); err == nil {
-			log.Printf("C[%d] Get v:%v", ck.clientId, val)
+			DPrintf("C[%d] Get v:%v", ck.clientId, val)
 			return val
 		} else {
-			// log.Printf("C[%d] Get error:%s", ck.clientId, err)
+			// DPrintf("C[%d] Get error:%s", ck.clientId, err)
 		}
 	}
 
@@ -76,10 +82,10 @@ func (ck *Clerk) Get(key string) string {
 		}
 
 		if val, err := ck.handleGetReply(&reply); err != nil {
-			// log.Printf("C[%d] Get error:%s", ck.clientId, err)
+			// DPrintf("C[%d] Get error:%s", ck.clientId, err)
 			continue
 		} else {
-			log.Printf("C[%d] Get v:%v", ck.clientId, val)
+			DPrintf("C[%d] Get v:%v", ck.clientId, val)
 			return val
 		}
 	}
@@ -101,6 +107,11 @@ func (ck *Clerk) handleGetReply(reply *GetReply) (string, error) {
 }
 
 func (ck *Clerk) PutAppend(key string, value string, op string) {
+	begin := time.Now()
+	defer func() {
+		end := time.Now()
+		DPrintf("C[%d] %s %dms", ck.clientId, op, (end.Sub(begin)).Milliseconds())
+	}()
 	args := PutAppendArgs{
 		Key:      key,
 		Value:    value,
@@ -109,13 +120,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Seq:      atomic.AddInt32(&ck.cmdSeq, 1),
 	}
 	reply := PutAppendReply{}
-	log.Printf("C[%d] first send args=%+v to %d", ck.clientId, args, ck.curServer)
+	DPrintf("C[%d] first send args=%+v to %d", ck.clientId, args, ck.curServer)
 	if ok := ck.servers[ck.curServer].Call("KVServer.PutAppend", &args, &reply); ok {
 		if err := ck.handlePutAppendReply(&reply); err == nil {
-			log.Printf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
+			DPrintf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
 			return
 		} else {
-			// log.Printf("C[%d] %s error:%s", ck.clientId, op, err)
+			// DPrintf("C[%d] %s error:%s", ck.clientId, op, err)
 		}
 	}
 
@@ -126,16 +137,16 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		/* 选择新的服务器进行发送 */
 		ck.curServer = i
-		log.Printf("C[%d] reSend args=%+v to %d", ck.clientId, args, i)
+		DPrintf("C[%d] reSend args=%+v to %d", ck.clientId, args, i)
 
 		if ok := ck.servers[ck.curServer].Call("KVServer.PutAppend", &args, &reply); !ok {
 			continue
 		}
 		if err := ck.handlePutAppendReply(&reply); err != nil {
-			// log.Printf("C[%d] %s error:%s", ck.clientId, op, err)
+			// DPrintf("C[%d] %s error:%s", ck.clientId, op, err)
 			continue
 		} else {
-			log.Printf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
+			DPrintf("C[%d] %s {k:%v v:%v} OK", ck.clientId, op, key, value)
 			return
 		}
 	}

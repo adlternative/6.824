@@ -241,6 +241,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			index = logEntry.LogicIndex
 			rf.DebugWithLock("start log: %+v in index(%d)", logEntry, index)
 			rf.matchIndex[rf.me] = index
+			// begin := time.Now()
+			// defer func() {
+			// 	end := time.Now()
+			// 	DPrintf("persist %dms", (end.Sub(begin)).Milliseconds())
+			// }()
 			rf.persist()
 		}
 		rf.mu.Unlock()

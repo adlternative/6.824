@@ -156,7 +156,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		rf.DebugWithLock("index=%d < rf.log.LastIncludedIndex=%d we already have a bigger snapshot", index, rf.log.LastIncludedIndex)
 		return
 	}
-	rf.DebugWithLock("Snapshot index=%d rf.log.getEntryIndex(index)=%d rf.log=%v", index, rf.log.getEntryIndex(index), rf.log)
+	// rf.DebugWithLock("Snapshot index=%d rf.log.getEntryIndex(index)=%d rf.log=%v", index, rf.log.getEntryIndex(index), rf.log)
 
 	// /* 丢弃 index 之前旧的日志 */
 	entryIndex := rf.log.getEntryIndex(index)

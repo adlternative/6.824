@@ -252,7 +252,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
 		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
 		/* 去除冲突项 */
-		rf.log.Entries = rf.log.Entries[:rf.log.getEntryIndex(args.PrevLogIndex+1)]
+		needPersist := false
+		if rf.log.Len() != args.PrevLogIndex+1 {
+			rf.log.Entries = rf.log.Entries[:rf.log.getEntryIndex(args.PrevLogIndex+1)]
+			needPersist = true
+		}
 
 		if args.Entries == nil || len(args.Entries) == 0 {
 			rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
@@ -260,9 +264,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.DebugWithLock("get log entries from S[%d]", args.LeaderId)
 			/* 后添新项 */
 			rf.log.Entries = append(rf.log.Entries, args.Entries...)
+			needPersist = true
 			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
 		}
-		rf.persist()
+		if needPersist {
+			rf.persist()
+		}
 
 		rf.DebugWithLock("args.LeaderCommit=%v rf.log.Len()-1=%v rf.lastApplied=%v",
 			args.LeaderCommit, rf.log.Len()-1, rf.lastApplied)
@@ -352,8 +359,8 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 				i, rf.nextIndex[i], rf.log.Len())
 		}
 
-		rf.DebugWithLock("rf.log=%+v matchIndex[%d]=%d commitIndex=%d", rf.log,
-			i, rf.matchIndex[i], rf.commitIndex)
+		// rf.DebugWithLock("rf.log=%+v matchIndex[%d]=%d commitIndex=%d", rf.log,
+		// 	i, rf.matchIndex[i], rf.commitIndex)
 		if rf.log.TermOf(rf.matchIndex[i]) == rf.currentTerm {
 			matchCnt := 0
 			for j := 0; j < len(rf.matchIndex); j++ {

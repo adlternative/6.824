@@ -95,7 +95,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	select {
 	case msg := <-noticeCh:
 		kv.mu.Lock()
-		defer log.Printf("KV[%d] Get reply %+v", kv.me, reply)
+		defer DPrintf("KV[%d] Get reply %+v", kv.me, reply)
 		defer func() {
 			// kv.clientsInfo
 		}()
@@ -139,7 +139,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
-		log.Printf("KV[%d] want start %v ,but it's not otLeader\n", kv.me, op)
+		DPrintf("KV[%d] want start %v ,but it's not otLeader\n", kv.me, op)
 		reply.Error = ErrWrongLeader
 		kv.mu.Unlock()
 		return
@@ -148,7 +148,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	/* 等待 raft 处理 */
 	select {
 	case msg := <-noticeCh:
-		defer log.Printf("KV[%d] PutAppend reply %+v", kv.me, reply)
+		defer DPrintf("KV[%d] PutAppend reply %+v", kv.me, reply)
 		kv.mu.Lock()
 		if term, isLeader := kv.rf.GetState(); !isLeader || term != oldTerm {
 			reply.Error = ErrWrongLeader
@@ -213,7 +213,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	/* 监听客户端从 applyCh 的提交 */
 	go func() {
 		for msg := range kv.applyCh {
-			log.Printf("KV[%d] applyCh: %+v\n", kv.me, msg)
+			DPrintf("KV[%d] applyCh: %+v\n", kv.me, msg)
 			if msg.CommandValid {
 
 				cmdOp := msg.Command.(Op)
