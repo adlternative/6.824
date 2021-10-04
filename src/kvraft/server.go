@@ -257,7 +257,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						}
 					} else {
 						/* 否则构造记录 */
-						kv.stateMachine[cmdOp.Key] += cmdOp.Value
+						if cmdOp.Op == "Append" {
+							kv.stateMachine[cmdOp.Key] += cmdOp.Value
+						} else if cmdOp.Op == "Put" {
+							kv.stateMachine[cmdOp.Key] = cmdOp.Value
+						}
 						record := ClientsOpRecord{
 							Op:    cmdOp,
 							Error: OK,
