@@ -63,7 +63,6 @@ func Get(cfg *config, ck *Clerk, key string, log *OpLog, cli int) string {
 }
 
 func Put(cfg *config, ck *Clerk, key string, value string, log *OpLog, cli int) {
-	fmt.Printf("log: %v\n", log)
 	start := time.Now().UnixNano()
 	ck.Put(key, value)
 	end := time.Now().UnixNano()

@@ -158,6 +158,9 @@ type Raft struct {
 
 	/* 协程数量统计 (之前有时接收端死锁了发送端可能飙到8k 其实应当重试) */
 	routineCnt int32 // 主动开的 go协程数量统计
+
+	/* 向外提供订阅的 ch,如果从 leader -> follower */
+	registerNotLeaderNowCh []chan<- interface{}
 }
 
 //
@@ -185,7 +188,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
 	rf.snapShotPersistCond = sync.NewCond(&rf.mu)
-
+	rf.registerNotLeaderNowCh = []chan<- interface{}{}
 	/* 恢复日志 */
 	rf.readPersist(persister.ReadRaftState())
 

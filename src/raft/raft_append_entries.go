@@ -169,7 +169,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		/* 1. 如果领导者的任期 小于 接收者的当前任期 返回假 */
-		rf.DebugWithLock("[reject AE]: 领导者的任期 小于 接收者的当前任期", args)
+		rf.DebugWithLock("[reject AE]: 领导者的任期 %v 小于 接收者的当前任期 %v", args.Term, rf.currentTerm)
 		reply.Success = false
 		return
 	} else if args.Term > rf.currentTerm {
