@@ -46,6 +46,13 @@ func (rf *Raft) HeartBeatTicker() {
 			/* 发送心跳 */
 			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
 			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
+		case term := <-rf.signalHeartBeatTickerCh:
+			if term != rf.currentTerm {
+				continue
+			}
+			/* 发送心跳 */
+			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
+			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
 		case <-ctx.Done():
 			/* 领导者状态发生了改变 */
 			return

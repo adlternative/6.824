@@ -3,11 +3,10 @@ package kvraft
 import (
 	"crypto/rand"
 	"fmt"
+	"log"
 	"math/big"
-	"time"
-
-	// _ "runtime/debug"
 	"sync/atomic"
+	"time"
 
 	"6.824/labrpc"
 )
@@ -52,7 +51,7 @@ func (ck *Clerk) Get(key string) string {
 	begin := time.Now()
 	defer func() {
 		end := time.Now()
-		DPrintf("C[%d] Get %dms", ck.clientId, (end.Sub(begin)).Milliseconds())
+		log.Printf("C[%d] Get %dms", ck.clientId, (end.Sub(begin)).Milliseconds())
 	}()
 	args := GetArgs{
 		Key:      key,
@@ -110,7 +109,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	begin := time.Now()
 	defer func() {
 		end := time.Now()
-		DPrintf("C[%d] %s %dms", ck.clientId, op, (end.Sub(begin)).Milliseconds())
+		log.Printf("C[%d] %s %dms", ck.clientId, op, (end.Sub(begin)).Milliseconds())
 	}()
 	args := PutAppendArgs{
 		Key:      key,

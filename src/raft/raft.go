@@ -18,25 +18,13 @@ package raft
 //
 
 import (
-	//	"bytes"
-	// "context"
-	// "log"
+	"6.824/labrpc"
 	"fmt"
-	"log"
-	"runtime"
-
-	// "log"
 	"math/rand"
-	// "os"
-	// "runtime"
-	// "strconv"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	//	"6.824/labgob"
-	"6.824/labrpc"
-	// "github.com/google/logger"
 )
 
 //
@@ -154,12 +142,13 @@ type Raft struct {
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 协程间同步与通信 */
-	mu                    sync.Mutex       // Lock to protect shared access to this peer's state
-	resetTimerCh          chan bool        /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	applyCh               chan ApplyMsg    // 用于提交日志条目
-	signalApplyCh         chan interface{} // 用来通知 applyCh 可以提交日志条目了
-	snapShotPersistCond   *sync.Cond       // Condition variable to wait for state changes
-	snapShotMayMatchIndex int              /* 用一个共享变量进行通信吧 */
+	mu                      sync.Mutex       // Lock to protect shared access to this peer's state
+	applyCh                 chan ApplyMsg    // 用于提交日志条目
+	resetTimerCh            chan interface{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
+	signalApplyCh           chan interface{} // 用来通知 applyCh 可以提交日志条目了
+	signalHeartBeatTickerCh chan int         // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
+	snapShotPersistCond     *sync.Cond       // Condition variable to wait for state changes
+	snapShotMayMatchIndex   int              /* 用一个共享变量进行通信吧 */
 	/* 超时管理 */
 	sendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
 	recvHeartBeatTimeOut time.Duration // 接受心跳超时时间--用于选举超时
@@ -190,7 +179,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.state = Follower
-	rf.resetTimerCh = make(chan bool)
+	rf.resetTimerCh = make(chan interface{})
+	rf.signalHeartBeatTickerCh = make(chan int)
 	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
@@ -247,6 +237,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			// 	DPrintf("persist %dms", (end.Sub(begin)).Milliseconds())
 			// }()
 			rf.persist()
+			rf.signalHeartBeatTickerCh <- term
 		}
 		rf.mu.Unlock()
 	}
@@ -255,7 +246,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 func (rf *Raft) RoutineCntDebug(internal int) {
 	for {
-		log.Printf("S[%d] go routine count: %d, total: %d",
+		DPrintf("S[%d] go routine count: %d, total: %d",
 			rf.me, atomic.LoadInt32(&rf.routineCnt), runtime.NumGoroutine())
 		time.Sleep(time.Duration(internal) * time.Second)
 	}
@@ -284,5 +275,5 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) resetTimer() {
 	rf.DebugWithLock("reset Timer!")
-	rf.resetTimerCh <- true /* 重置等待选举的超时定时器 */
+	rf.resetTimerCh <- interface{}(nil) /* 重置等待选举的超时定时器 */
 }

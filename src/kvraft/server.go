@@ -1,13 +1,12 @@
 package kvraft
 
 import (
-	"log"
-	"sync"
-	"sync/atomic"
-
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"log"
+	"sync"
+	"sync/atomic"
 )
 
 const Debug = true
@@ -55,8 +54,6 @@ type KVServer struct {
 	stateMachine    map[string]string         /* 服务器状态机 */
 	ClientsOpRecord map[int64]ClientsOpRecord /* 客户端的最后请求的历史记录（后期可以修改为所有的历史记录） */
 	activeClients   map[int64]*ActiveClient   /* clientId -> activeClient */
-
-	// clientsReplylog
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {

@@ -24,17 +24,21 @@ func (rf *Raft) FatalWithLock(format string, a ...interface{}) {
 }
 
 func (rf *Raft) DebugWithLock(format string, a ...interface{}) {
-	alist := []interface{}{rf.currentTerm, rf.me, rf.state}
-	alist = append(alist, a...)
+	if Debug {
+		alist := []interface{}{rf.currentTerm, rf.me, rf.state}
+		alist = append(alist, a...)
 
-	log.Printf("T[%03d] S[%03d] I[%s] "+format, alist...)
+		log.Printf("T[%03d] S[%03d] I[%s] "+format, alist...)
+	}
 }
 
 func (rf *Raft) DebugUnsafe(format string, a ...interface{}) {
-	alist := []interface{}{rf.me}
-	alist = append(alist, a...)
+	if Debug {
+		alist := []interface{}{rf.me}
+		alist = append(alist, a...)
 
-	log.Printf("T[XXX] S[%03d] I[XXX]"+format, alist...)
+		log.Printf("T[XXX] S[%03d] I[XXX]"+format, alist...)
+	}
 }
 
 func (rf *Raft) Debug(format string, a ...interface{}) {
