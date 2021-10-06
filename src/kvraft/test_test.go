@@ -3,10 +3,10 @@ package kvraft
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
+	"net/http"
+	"net/http/pprof"
 	"math/rand"
-	"os"
-	"runtime/pprof"
+	// "os"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,7 +308,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
 
 		if partitions {
-			// DPrintf("wait for partitioner\n")
+			DPrintf("wait for partitioner\n")
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
@@ -320,7 +320,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		}
 
 		if crash {
-			// DPrintf("shutdown servers\n")
+			DPrintf("shutdown servers\n")
 			for i := 0; i < nservers; i++ {
 				cfg.ShutdownServer(i)
 			}
@@ -335,15 +335,15 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 			cfg.ConnectAll()
 		}
 
-		// DPrintf("wait for clients\n")
+		DPrintf("wait for clients\n")
 		for i := 0; i < nclients; i++ {
-			// DPrintf("read from clients %d\n", i)
+			DPrintf("read from clients %d\n", i)
 			j := <-clnts[i]
-			// if j < 10 {
-			// 	DPrintf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
-			// }
+			if j < 10 {
+				DPrintf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
+			}
 			key := strconv.Itoa(i)
-			// DPrintf("Check %v for client %d\n", j, i)
+			DPrintf("Check %v for client %d\n", j, i)
 			v := Get(cfg, ck, key, opLog, 0)
 			if !randomkeys {
 				checkClntAppends(t, i, v, j)
@@ -429,11 +429,11 @@ func TestBasic3A(t *testing.T) {
 }
 
 func TestSpeed3A(t *testing.T) {
-  log.SetFlags(log.Lshortfile | log.Ldate | log.Lmicroseconds)
-	f, _ := os.OpenFile("cpu.pprof", os.O_CREATE|os.O_RDWR, 0644)
-	defer f.Close()
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
+	// log.SetFlags(log.Lshortfile | log.Ldate | log.Lmicroseconds)
+	// f, _ := os.OpenFile("cpu.pprof", os.O_CREATE|os.O_RDWR, 0644)
+	// defer f.Close()
+	// pprof.StartCPUProfile(f)
+	// defer pprof.StopCPUProfile()
 	GenericTestSpeed(t, "3A", -1)
 }
 
@@ -483,6 +483,7 @@ func TestUnreliableOneKey3A(t *testing.T) {
 // doesn't go through until the partition heals.  The leader in the original
 // network ends up in the minority partition.
 func TestOnePartition3A(t *testing.T) {
+
 	const nservers = 5
 	cfg := make_config(t, nservers, false, -1)
 	defer cfg.cleanup()
@@ -558,6 +559,15 @@ func TestOnePartition3A(t *testing.T) {
 }
 
 func TestManyPartitionsOneClient3A(t *testing.T) {
+
+	const (
+		pprofAddr string = ":7890"
+	)
+
+	pprofHandler := http.NewServeMux()
+	pprofHandler.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
+	server := &http.Server{Addr: pprofAddr, Handler: pprofHandler}
+	go server.ListenAndServe()
 	// Test: partitions, one client (3A) ...
 	GenericTest(t, "3A", 1, 5, false, false, true, -1, false)
 }

@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"github.com/jwangsadinata/go-multimap/slicemultimap"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -36,10 +37,14 @@ type ClientsOpRecord struct {
 	Error       string
 }
 
+type NoticeCh struct {
+	ApplyMsgChs       chan *ClientsOpRecord
+	NotLeaderEventChs chan *ClientsOpRecord
+}
+
 type ActiveClient struct {
-	ClientId          int64
-	ApplyMsgChs       map[int32]chan *ClientsOpRecord
-	NotLeaderEventChs map[int32]chan *ClientsOpRecord
+	ClientId    int64
+	NoticeChMap *slicemultimap.MultiMap
 }
 
 type KVServer struct {
@@ -75,49 +80,49 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
 	notLeaderEventCh := make(chan *ClientsOpRecord, 1)
+	noticeChs := NoticeCh{applyMsgCh, notLeaderEventCh}
 
 	if client, ok := kv.activeClients[args.ClientId]; ok {
-		client.ApplyMsgChs[args.Seq] = applyMsgCh
+		if client.NoticeChMap == nil {
+			client.NoticeChMap = slicemultimap.New()
+		}
+		client.NoticeChMap.Put(args.Seq, noticeChs)
 	} else {
 		kv.activeClients[args.ClientId] = &ActiveClient{
-			ClientId:          args.ClientId,
-			ApplyMsgChs:       make(map[int32]chan *ClientsOpRecord),
-			NotLeaderEventChs: make(map[int32]chan *ClientsOpRecord),
+			ClientId:    args.ClientId,
+			NoticeChMap: slicemultimap.New(),
 		}
-		kv.activeClients[args.ClientId].NotLeaderEventChs[args.Seq] = notLeaderEventCh
-		kv.activeClients[args.ClientId].ApplyMsgChs[args.Seq] = applyMsgCh
+		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
 
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Error = ErrWrongLeader
 		kv.mu.Unlock()
+		kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 		return
 	}
 	kv.mu.Unlock()
 	/* 等待 raft 处理 */
+
 	select {
+	case <-notLeaderEventCh:
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[1]", kv.me, args.ClientId, args.Seq)
+		kv.mu.Lock()
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[2]", kv.me, args.ClientId, args.Seq)
+		reply.Error = ErrWrongLeader
 	case msg := <-applyMsgCh:
 		kv.mu.Lock()
-		defer DPrintf("KV[%d] Get reply %+v", kv.me, reply)
+		defer DPrintf("KV[%d] will send Get reply %+v to C[%d] Seq[%d]", kv.me, reply, args.ClientId, args.Seq)
 		if term, isLeader := kv.rf.GetState(); !isLeader || term != oldTerm {
 			reply.Error = ErrWrongLeader
-			return
+		} else {
+			reply.Error = (string)(msg.Error)
+			reply.Value = msg.ResultValue
 		}
-
-		reply.Error = (string)(msg.Error)
-		reply.Value = msg.ResultValue
-
-		kv.mu.Unlock()
-		return
-	case <-notLeaderEventCh:
-		kv.mu.Lock()
-		delete(kv.activeClients[args.ClientId].ApplyMsgChs, args.Seq)
-		delete(kv.activeClients[args.ClientId].NotLeaderEventChs, args.Seq)
-		kv.mu.Unlock()
-		return
-		// case timeout
 	}
+	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -139,22 +144,25 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
 	notLeaderEventCh := make(chan *ClientsOpRecord, 1)
+	noticeChs := NoticeCh{applyMsgCh, notLeaderEventCh}
 
 	if client, ok := kv.activeClients[args.ClientId]; ok {
-		client.ApplyMsgChs[args.Seq] = applyMsgCh
+		if client.NoticeChMap == nil {
+			client.NoticeChMap = slicemultimap.New()
+		}
+		client.NoticeChMap.Put(args.Seq, noticeChs)
 	} else {
 		kv.activeClients[args.ClientId] = &ActiveClient{
-			ClientId:          args.ClientId,
-			ApplyMsgChs:       make(map[int32]chan *ClientsOpRecord),
-			NotLeaderEventChs: make(map[int32]chan *ClientsOpRecord),
+			ClientId:    args.ClientId,
+			NoticeChMap: slicemultimap.New(),
 		}
-		kv.activeClients[args.ClientId].NotLeaderEventChs[args.Seq] = notLeaderEventCh
-		kv.activeClients[args.ClientId].ApplyMsgChs[args.Seq] = applyMsgCh
+		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
 
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
-		DPrintf("KV[%d] want start %v ,but it's not otLeader\n", kv.me, op)
+		DPrintf("KV[%d] want start %+v ,but it's not otLeader\n", kv.me, op)
+		kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 		reply.Error = ErrWrongLeader
 		kv.mu.Unlock()
 		return
@@ -162,24 +170,24 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Unlock()
 	/* 等待 raft 处理 */
 	select {
+	case <-notLeaderEventCh:
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[1]", kv.me, args.ClientId, args.Seq)
+
+		kv.mu.Lock()
+		reply.Error = ErrWrongLeader
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[2]", kv.me, args.ClientId, args.Seq)
 	case msg := <-applyMsgCh:
-		defer DPrintf("KV[%d] PutAppend reply %+v", kv.me, reply)
+		defer DPrintf("KV[%d] will send %s reply %+v to C[%d] Seq[%d]", kv.me, args.Op, reply, args.ClientId, args.Seq)
 		kv.mu.Lock()
 		if term, isLeader := kv.rf.GetState(); !isLeader || term != oldTerm {
 			reply.Error = ErrWrongLeader
-			return
+		} else {
+			reply.Error = (string)(msg.Error)
 		}
-		reply.Error = (string)(msg.Error)
-		kv.mu.Unlock()
-		return
-	case <-notLeaderEventCh:
-		kv.mu.Lock()
-		delete(kv.activeClients[args.ClientId].ApplyMsgChs, args.Seq)
-		delete(kv.activeClients[args.ClientId].NotLeaderEventChs, args.Seq)
-		kv.mu.Unlock()
-		return
 		// case timeout
 	}
+	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
+	kv.mu.Unlock()
 }
 
 //
@@ -232,18 +240,17 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.ClientsOpRecord = make(map[int64]ClientsOpRecord)
 	kv.activeClients = make(map[int64]*ActiveClient)
 	go func() {
-		ch := make(chan interface{})
-		kv.rf.RegisterNotLeaderNowCh(ch)
+		wait_ch := make(chan interface{})
+		kv.rf.RegisterNotLeaderNowCh(wait_ch)
 		for !kv.killed() {
-			<-ch
+			DPrintf("KV[%d] wait for NotLeaderEvent", kv.me)
+			<-wait_ch
 			kv.mu.Lock()
 			for _, client := range kv.activeClients {
-				DPrintf("KV[%d] want to send NotLeaderEvent to C[%d]", kv.me, client.ClientId)
-				for _, ch := range client.NotLeaderEventChs {
-					ch <- &ClientsOpRecord{
-						Error: ErrWrongLeader,
-					}
-					DPrintf("KV[%d] send NotLeaderEvent to C[%d] ok", kv.me, client.ClientId)
+				for _, entry := range client.NoticeChMap.Entries() {
+					DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d]", kv.me, client.ClientId, entry.Key.(int32))
+					entry.Value.(NoticeCh).NotLeaderEventChs <- &ClientsOpRecord{Error: ErrWrongLeader}
+					DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[0]", kv.me, client.ClientId, entry.Key.(int32))
 				}
 			}
 			kv.mu.Unlock()
@@ -260,16 +267,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				switch cmdOp.Op {
 				case "Get":
 					kv.mu.Lock()
+					var record ClientsOpRecord
+					ok := false
+
 					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-					if record, ok := kv.ClientsOpRecord[cmdOp.ClientId]; ok && record.Op.Seq == cmdOp.Seq {
-						if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-							if ch, ok := activeClient.ApplyMsgChs[cmdOp.Seq]; ok {
-								ch <- &record
-							}
-						}
-					} else {
+					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
 						/* 否则构造记录 */
-						record := ClientsOpRecord{
+						record = ClientsOpRecord{
 							Op: cmdOp,
 						}
 						/* resultValue 和 err */
@@ -281,41 +285,40 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						}
 
 						kv.ClientsOpRecord[cmdOp.ClientId] = record
-
-						if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-							if ch, ok := activeClient.ApplyMsgChs[cmdOp.Seq]; ok {
-								ch <- &record
+					}
+					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
+						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
+							for _, entry := range entries {
+								entry.(NoticeCh).ApplyMsgChs <- &record
 							}
 						}
-						/* 使用有缓冲区的 channel，
-						即便是对面没有人接受也是可以接受的 */
 					}
+					/* 使用有缓冲区的 channel，
+					即便是对面没有人接受也是可以接受的 */
 					kv.mu.Unlock()
 				case "Put", "Append":
 					kv.mu.Lock()
+					var record ClientsOpRecord
+					ok := false
+
 					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-					if record, ok := kv.ClientsOpRecord[cmdOp.ClientId]; ok && record.Op.Seq == cmdOp.Seq {
-						if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-							if ch, ok := activeClient.ApplyMsgChs[cmdOp.Seq]; ok {
-								ch <- &record
-							}
-						}
-					} else {
+					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
 						/* 否则构造记录 */
 						if cmdOp.Op == "Append" {
 							kv.memTable[cmdOp.Key] += cmdOp.Value
 						} else if cmdOp.Op == "Put" {
 							kv.memTable[cmdOp.Key] = cmdOp.Value
 						}
-						record := ClientsOpRecord{
+						record = ClientsOpRecord{
 							Op:    cmdOp,
 							Error: OK,
 						}
 						kv.ClientsOpRecord[cmdOp.ClientId] = record
-
-						if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-							if ch, ok := activeClient.ApplyMsgChs[cmdOp.Seq]; ok {
-								ch <- &record
+					}
+					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
+						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
+							for _, entry := range entries {
+								entry.(NoticeCh).ApplyMsgChs <- &record
 							}
 						}
 					}
