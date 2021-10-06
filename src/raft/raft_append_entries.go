@@ -27,15 +27,12 @@ type AppendEntriesReply struct {
 
 /* leader 才可以定期发送心跳包 */
 func (rf *Raft) HeartBeatTicker() {
-	atomic.AddInt32(&rf.routineCnt, 1)
-	defer atomic.AddInt32(&rf.routineCnt, -1)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	/* 立即发送一波 */
 	rf.HeartBeatTimeOutCallBack(ctx, cancel)
 
-	HeartBeatTimeOut := time.NewTimer(rf.sendHeartBeatTimeOut) /* 100 */
+	HeartBeatTimeOut := time.NewTimer(rf.SendHeartBeatTimeOut) /* 100 */
 	defer HeartBeatTimeOut.Stop()
 
 	for !rf.killed() {
@@ -44,14 +41,11 @@ func (rf *Raft) HeartBeatTicker() {
 		/* 超时 */
 		case <-HeartBeatTimeOut.C:
 			/* 发送心跳 */
-			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
+			HeartBeatTimeOut.Reset(rf.SendHeartBeatTimeOut)
 			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
-		case term := <-rf.signalHeartBeatTickerCh:
-			if term != rf.currentTerm {
-				continue
-			}
+		case <-rf.signalHeartBeatTickerCh:
 			/* 发送心跳 */
-			HeartBeatTimeOut.Reset(rf.sendHeartBeatTimeOut)
+			HeartBeatTimeOut.Reset(rf.SendHeartBeatTimeOut)
 			go rf.HeartBeatTimeOutCallBack(ctx, cancel)
 		case <-ctx.Done():
 			/* 领导者状态发生了改变 */

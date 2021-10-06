@@ -4,6 +4,7 @@ const (
 	OK             = "OK"
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrTimeOut     = "ErrTimeOut"
 )
 
 type Err string
@@ -32,6 +33,6 @@ type GetArgs struct {
 }
 
 type GetReply struct {
-	Error   string
+	Error string
 	Value string
 }

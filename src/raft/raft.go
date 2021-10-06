@@ -146,12 +146,12 @@ type Raft struct {
 	applyCh                 chan ApplyMsg    // 用于提交日志条目
 	resetTimerCh            chan interface{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
 	signalApplyCh           chan interface{} // 用来通知 applyCh 可以提交日志条目了
-	signalHeartBeatTickerCh chan int         // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
+	signalHeartBeatTickerCh chan interface{} // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
 	snapShotPersistCond     *sync.Cond       // Condition variable to wait for state changes
 	snapShotMayMatchIndex   int              /* 用一个共享变量进行通信吧 */
 	/* 超时管理 */
-	sendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
-	recvHeartBeatTimeOut time.Duration // 接受心跳超时时间--用于选举超时
+	SendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
+	VoteTimeOut          time.Duration // 接受心跳超时时间--用于选举超时
 
 	/* 日志 别用 */
 	// logger               *logger.Logger
@@ -183,9 +183,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.state = Follower
 	rf.resetTimerCh = make(chan interface{})
-	rf.signalHeartBeatTickerCh = make(chan int)
-	rf.sendHeartBeatTimeOut = 100 * time.Millisecond
-	rf.recvHeartBeatTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
+	rf.signalHeartBeatTickerCh = make(chan interface{})
+	rf.SendHeartBeatTimeOut = 100 * time.Millisecond
+	rf.VoteTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
 	// initialize from state persisted before a crash
 	rf.snapShotPersistCond = sync.NewCond(&rf.mu)
 	rf.registerNotLeaderNowCh = []chan<- interface{}{}
@@ -240,7 +240,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			// 	DPrintf("persist %dms", (end.Sub(begin)).Milliseconds())
 			// }()
 			rf.persist()
-			rf.signalHeartBeatTickerCh <- term
+			/* 非阻塞防止死锁 */
+			go func() { rf.signalHeartBeatTickerCh <- interface{}(nil) }()
+			rf.DebugWithLock("will restart leader HeartBeat")
 		}
 		rf.mu.Unlock()
 	}

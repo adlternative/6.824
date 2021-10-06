@@ -3,8 +3,6 @@ package kvraft
 import (
 	"fmt"
 	"io/ioutil"
-	"net/http"
-	"net/http/pprof"
 	"math/rand"
 	// "os"
 	"strconv"
@@ -559,15 +557,6 @@ func TestOnePartition3A(t *testing.T) {
 }
 
 func TestManyPartitionsOneClient3A(t *testing.T) {
-
-	const (
-		pprofAddr string = ":7890"
-	)
-
-	pprofHandler := http.NewServeMux()
-	pprofHandler.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
-	server := &http.Server{Addr: pprofAddr, Handler: pprofHandler}
-	go server.ListenAndServe()
 	// Test: partitions, one client (3A) ...
 	GenericTest(t, "3A", 1, 5, false, false, true, -1, false)
 }

@@ -42,7 +42,7 @@ func (rf *Raft) ticker() {
 	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
 	// }
 
-	timeout := time.NewTimer(rf.recvHeartBeatTimeOut)
+	timeout := time.NewTimer(rf.VoteTimeOut)
 	defer timeout.Stop()
 
 	for !rf.killed() {

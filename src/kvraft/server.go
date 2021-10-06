@@ -1,16 +1,18 @@
 package kvraft
 
 import (
+	"log"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
 	"github.com/jwangsadinata/go-multimap/slicemultimap"
-	"log"
-	"sync"
-	"sync/atomic"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -80,7 +82,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
 	notLeaderEventCh := make(chan *ClientsOpRecord, 1)
-	noticeChs := NoticeCh{applyMsgCh, notLeaderEventCh}
+	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
 
 	if client, ok := kv.activeClients[args.ClientId]; ok {
 		if client.NoticeChMap == nil {
@@ -94,12 +96,14 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
+	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	defer leaseTimeOut.Stop()
 
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		reply.Error = ErrWrongLeader
-		kv.mu.Unlock()
 		kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
+		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
@@ -107,19 +111,22 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	select {
 	case <-notLeaderEventCh:
-		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[1]", kv.me, args.ClientId, args.Seq)
 		kv.mu.Lock()
-		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[2]", kv.me, args.ClientId, args.Seq)
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
 		reply.Error = ErrWrongLeader
 	case msg := <-applyMsgCh:
 		kv.mu.Lock()
-		defer DPrintf("KV[%d] will send Get reply %+v to C[%d] Seq[%d]", kv.me, reply, args.ClientId, args.Seq)
+		DPrintf("KV[%d] will send Get reply %+v to C[%d] Seq[%d]", kv.me, reply, args.ClientId, args.Seq)
 		if term, isLeader := kv.rf.GetState(); !isLeader || term != oldTerm {
 			reply.Error = ErrWrongLeader
 		} else {
-			reply.Error = (string)(msg.Error)
+			reply.Error = msg.Error
 			reply.Value = msg.ResultValue
 		}
+	case <-leaseTimeOut.C:
+		kv.mu.Lock()
+		DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
+		reply.Error = ErrTimeOut
 	}
 	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 	kv.mu.Unlock()
@@ -144,7 +151,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
 	notLeaderEventCh := make(chan *ClientsOpRecord, 1)
-	noticeChs := NoticeCh{applyMsgCh, notLeaderEventCh}
+	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
 
 	if client, ok := kv.activeClients[args.ClientId]; ok {
 		if client.NoticeChMap == nil {
@@ -159,9 +166,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
 
+	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	defer leaseTimeOut.Stop()
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
-		DPrintf("KV[%d] want start %+v ,but it's not otLeader\n", kv.me, op)
+		DPrintf("KV[%d] want start %+v ,but it's not a Leader\n", kv.me, op)
 		kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 		reply.Error = ErrWrongLeader
 		kv.mu.Unlock()
@@ -171,20 +180,21 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	/* 等待 raft 处理 */
 	select {
 	case <-notLeaderEventCh:
-		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[1]", kv.me, args.ClientId, args.Seq)
-
 		kv.mu.Lock()
+		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
 		reply.Error = ErrWrongLeader
-		DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[2]", kv.me, args.ClientId, args.Seq)
 	case msg := <-applyMsgCh:
-		defer DPrintf("KV[%d] will send %s reply %+v to C[%d] Seq[%d]", kv.me, args.Op, reply, args.ClientId, args.Seq)
 		kv.mu.Lock()
+		defer DPrintf("KV[%d] will send %s reply %+v to C[%d] Seq[%d]", kv.me, args.Op, reply, args.ClientId, args.Seq)
 		if term, isLeader := kv.rf.GetState(); !isLeader || term != oldTerm {
 			reply.Error = ErrWrongLeader
 		} else {
 			reply.Error = (string)(msg.Error)
 		}
-		// case timeout
+	case <-leaseTimeOut.C:
+		kv.mu.Lock()
+		DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
+		reply.Error = ErrTimeOut
 	}
 	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 	kv.mu.Unlock()
@@ -249,7 +259,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			for _, client := range kv.activeClients {
 				for _, entry := range client.NoticeChMap.Entries() {
 					DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d]", kv.me, client.ClientId, entry.Key.(int32))
-					entry.Value.(NoticeCh).NotLeaderEventChs <- &ClientsOpRecord{Error: ErrWrongLeader}
+					entry.Value.(*NoticeCh).NotLeaderEventChs <- &ClientsOpRecord{Error: ErrWrongLeader}
 					DPrintf("KV[%d] will send NotLeaderEvent to C[%d] Seq[%d] step[0]", kv.me, client.ClientId, entry.Key.(int32))
 				}
 			}
@@ -289,7 +299,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
 						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
 							for _, entry := range entries {
-								entry.(NoticeCh).ApplyMsgChs <- &record
+								entry.(*NoticeCh).ApplyMsgChs <- &record
 							}
 						}
 					}
@@ -318,7 +328,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
 						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
 							for _, entry := range entries {
-								entry.(NoticeCh).ApplyMsgChs <- &record
+								entry.(*NoticeCh).ApplyMsgChs <- &record
 							}
 						}
 					}

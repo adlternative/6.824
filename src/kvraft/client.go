@@ -93,8 +93,8 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) handleGetReply(reply *GetReply) (string, error) {
 
 	switch reply.Error {
-	case ErrWrongLeader:
-		return "", fmt.Errorf(ErrWrongLeader)
+	case ErrWrongLeader, ErrTimeOut:
+		return "", fmt.Errorf(reply.Error)
 		/* retry */
 	case ErrNoKey:
 		return "", nil
@@ -153,12 +153,11 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 func (ck *Clerk) handlePutAppendReply(reply *PutAppendReply) error {
 	switch reply.Error {
-	case ErrWrongLeader:
-		/* do something */
-		return fmt.Errorf(ErrWrongLeader)
+	case ErrWrongLeader, ErrTimeOut:
+		/* retry */
+		return fmt.Errorf(reply.Error)
 	case OK:
 		return nil
-		/* do something */
 	default:
 		return fmt.Errorf("unknown error")
 	}
