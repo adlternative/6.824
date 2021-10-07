@@ -62,7 +62,7 @@ func (ck *Clerk) Get(key string) string {
 
 	if ok := ck.servers[ck.curServer].Call("KVServer.Get", &args, &reply); ok {
 		if val, err := ck.handleGetReply(&reply); err == nil {
-			DPrintf("C[%d] Get v:%v", ck.clientId, val)
+			DPrintf("C[%d] Get ok!", ck.clientId)
 			return val
 		} else {
 			// DPrintf("C[%d] Get error:%s", ck.clientId, err)
@@ -70,6 +70,7 @@ func (ck *Clerk) Get(key string) string {
 	}
 
 	for {
+		reply = GetReply{}
 		i := (int)(nrand() % (int64)(len(ck.servers)))
 		if ck.curServer == i {
 			continue
@@ -84,17 +85,17 @@ func (ck *Clerk) Get(key string) string {
 			// DPrintf("C[%d] Get error:%s", ck.clientId, err)
 			continue
 		} else {
-			DPrintf("C[%d] Get v:%v", ck.clientId, val)
+			DPrintf("C[%d] Get ok!", ck.clientId)
+			// DPrintf("C[%d] Get v:%v", ck.clientId, val)
 			return val
 		}
 	}
 }
 
 func (ck *Clerk) handleGetReply(reply *GetReply) (string, error) {
-
 	switch reply.Error {
 	case ErrWrongLeader, ErrTimeOut:
-		return "", fmt.Errorf(reply.Error)
+		return "", fmt.Errorf("%v", reply.Error)
 		/* retry */
 	case ErrNoKey:
 		return "", nil
@@ -130,6 +131,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 
 	for {
+		reply = PutAppendReply{}
 		i := (int)(nrand() % (int64)(len(ck.servers)))
 		if ck.curServer == i {
 			continue
@@ -155,7 +157,7 @@ func (ck *Clerk) handlePutAppendReply(reply *PutAppendReply) error {
 	switch reply.Error {
 	case ErrWrongLeader, ErrTimeOut:
 		/* retry */
-		return fmt.Errorf(reply.Error)
+		return fmt.Errorf("%v", reply.Error)
 	case OK:
 		return nil
 	default:

@@ -182,7 +182,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			/* 如果选举者的任期比自己的高，更新自己任期 */
 			rf.ResetToFollowerWithLock(fmt.Sprintf("S[%d]任期 T[%d] 小于 S[%d] 任期 T[%d]", rf.me, rf.CurrentTerm, args.CandidateId, args.Term))
 			rf.CurrentTerm = args.Term
-
 			/* 日志更新 */
 			if ok, err_reason := rf.ArelogNewerWithLock(args); ok {
 				/* 日志新 */

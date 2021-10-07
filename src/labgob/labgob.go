@@ -169,6 +169,10 @@ func checkDefault1(value reflect.Value, depth int, name string) {
 				// this warning typically arises if code re-uses the same RPC reply
 				// variable for multiple RPC calls, or if code restores persisted
 				// state into variable that already have non-default values.
+
+				/* 如果代码为多个 RPC 调用重用相同的 RPC 回复变量，
+				* 或者如果代码将持久状态恢复到已经具有非默认值的变量，
+				* 通常会出现此警告。 (其实就期望 reply 为空，但它有了值)*/
 				fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
 					what)
 				debug.PrintStack()

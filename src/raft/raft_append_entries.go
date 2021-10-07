@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-
-	// "runtime"
-	"sync/atomic"
 	"time"
 )
 
@@ -71,9 +68,6 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 			continue
 		}
 		go func(i int) {
-			atomic.AddInt32(&rf.routineCnt, 1)
-			defer atomic.AddInt32(&rf.routineCnt, -1)
-
 			for !rf.killed() {
 				rf.mu.Lock()
 
@@ -104,6 +98,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					rf.mu.Unlock()
 					/* ==========UNLOCK SPACE========= */
 					if ok := rf.sendInstallSnapshot(i, args, reply); !ok {
+						DPrintf("but sendInstallSnapshot not ok!")
 						// rf.Debug("sendInstallSnapshot to [%d]: not ok", i)
 						return
 					}
@@ -133,6 +128,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 					/* ==========UNLOCK SPACE========= */
 					/* [TODO] 出错多少次退出？ */
 					if ok := rf.sendAppendEntries(i, args, reply); !ok {
+						DPrintf("but sendAppendEntries not ok!")
 						return
 					}
 					/* =================== */
@@ -151,13 +147,12 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	atomic.AddInt32(&rf.routineCnt, 1)
-	defer atomic.AddInt32(&rf.routineCnt, -1)
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	rf.DebugWithLock("args=%+v", args)
+
+	needPersist := false
 
 	/* 设置返回值为 follower 的任期 */
 	reply.Term = rf.CurrentTerm
@@ -171,14 +166,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 		rf.VotedFor = -1
 		rf.CurrentTerm = args.Term
-		rf.persist()
+		needPersist = true
 	} else {
 		/* ASSERT(rf.CurrentTerm == args.Term) */
 		if rf.state == Candidate {
 			/* 选举人收到了新 leader 的 appendEntriesRpc */
 			rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 			rf.VotedFor = -1
-			rf.persist()
+			needPersist = true
 			/* 变回 跟随者 */
 		}
 	}
@@ -253,7 +248,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
 		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
 		/* 去除冲突项 */
-		needPersist := false
 		if rf.Log.Len() != args.PrevLogIndex+1 {
 			rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(args.PrevLogIndex+1)]
 			needPersist = true
@@ -360,7 +354,7 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 				i, rf.nextIndex[i], rf.Log.Len())
 		}
 
-		rf.DebugWithLock("rf.log=%+v", rf.Log)
+		// rf.DebugWithLock("rf.log=%+v", rf.Log)
 		rf.DebugWithLock("matchIndex=%+v commitIndex=%d", rf.matchIndex, rf.commitIndex)
 		/* 如果返回的 MATCHINDEX 是在快照中 直接返回，并决定是否需要重试（而不用做下面的提交了） */
 		if rf.Log.isIndexInSnapShot(rf.matchIndex[i]) {
