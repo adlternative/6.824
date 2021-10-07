@@ -17,7 +17,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 func (rf *Raft) FatalWithLock(format string, a ...interface{}) {
-	alist := []interface{}{rf.currentTerm, rf.me, rf.state}
+	alist := []interface{}{rf.CurrentTerm, rf.me, rf.state}
 	alist = append(alist, a...)
 
 	log.Fatalf("T[%03d] S[%03d] I[%s] "+format, alist...)
@@ -25,7 +25,7 @@ func (rf *Raft) FatalWithLock(format string, a ...interface{}) {
 
 func (rf *Raft) DebugWithLock(format string, a ...interface{}) {
 	if Debug {
-		alist := []interface{}{rf.currentTerm, rf.me, rf.state}
+		alist := []interface{}{rf.CurrentTerm, rf.me, rf.state}
 		alist = append(alist, a...)
 
 		log.Printf("T[%03d] S[%03d] I[%s] "+format, alist...)

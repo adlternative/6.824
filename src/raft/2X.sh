@@ -17,8 +17,7 @@ if [ "$4" == "GODEBUG" ]; then
 		fi
 	done
 else
-
-	go test -c -race -gcflags=all="-N -l"
+	go test -c -race -gcflags=all="-N -l" -o $1.test
 	for ((i = 0; i < $3; i++)); do
 		if [ "$2" != "." ]; then
 			./$1.test -test.run $2 1>$1.err 2>&1

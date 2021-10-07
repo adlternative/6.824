@@ -28,13 +28,13 @@ func (s State) String() string {
 func (rf *Raft) AreStateOrTermChangeWithLock(oldTerm int, oldState State) (bool, int, State) {
 	/* 状态改变  */
 	/* -1 表示 不关心 */
-	if (oldTerm != rf.currentTerm && oldTerm != -1) ||
+	if (oldTerm != rf.CurrentTerm && oldTerm != -1) ||
 		(oldState != rf.state && oldState != -1) {
-		rf.DebugWithLock("AreStateOrTermChangeWithLock: oldTerm %v oldState %v rf.currentTerm %v rf.state %v", oldTerm, oldState, rf.currentTerm, rf.state)
-		return true, rf.currentTerm, rf.state
+		rf.DebugWithLock("AreStateOrTermChangeWithLock: oldTerm %v oldState %v rf.CurrentTerm %v rf.state %v", oldTerm, oldState, rf.CurrentTerm, rf.state)
+		return true, rf.CurrentTerm, rf.state
 	}
 
-	return false, rf.currentTerm, rf.state
+	return false, rf.CurrentTerm, rf.state
 }
 
 /* 服务器状态或者任期发生变化 填入的 oldTerm == -1 || oldState == -1 表示我们不关心相关的属性 */
@@ -44,7 +44,7 @@ func (rf *Raft) AreStateOrTermChange(oldTerm int, oldState State) (bool, int, St
 	return rf.AreStateOrTermChangeWithLock(oldTerm, oldState)
 }
 
-// return currentTerm and whether this server
+// return CurrentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
@@ -53,7 +53,7 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 func (rf *Raft) GetStateWithLock() (int, bool) {
-	return rf.currentTerm, rf.state == Leader
+	return rf.CurrentTerm, rf.state == Leader
 }
 
 func (rf *Raft) ResetToFollower(reason string) {
@@ -86,10 +86,10 @@ func (rf *Raft) TurnToLeaderWithLock() {
 	// rf.DebugWithLock("TurnToLeaderWithLock with log: %v", rf.log)
 
 	rf.state = Leader
-	rf.votedFor = -1
+	rf.VotedFor = -1
 	// update nextIndex[]
 	for i := 0; i < len(rf.peers); i++ {
-		rf.nextIndex[i] = rf.log.Len()
+		rf.nextIndex[i] = rf.Log.Len()
 	}
 	// update matchIndex[]
 	for i := 0; i < len(rf.peers); i++ {

@@ -7,13 +7,16 @@ package labgob
 // about non-capitalized field names.
 //
 
-import "encoding/gob"
-import "io"
-import "reflect"
-import "fmt"
-import "sync"
-import "unicode"
-import "unicode/utf8"
+import (
+	"encoding/gob"
+	"fmt"
+	"io"
+	"reflect"
+	"runtime/debug"
+	"sync"
+	"unicode"
+	"unicode/utf8"
+)
 
 var mu sync.Mutex
 var errorCount int // for TestCapital
@@ -168,7 +171,9 @@ func checkDefault1(value reflect.Value, depth int, name string) {
 				// state into variable that already have non-default values.
 				fmt.Printf("labgob warning: Decoding into a non-default variable/field %v may not work\n",
 					what)
+				debug.PrintStack()
 			}
+
 			errorCount += 1
 			mu.Unlock()
 		}

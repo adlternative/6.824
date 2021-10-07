@@ -125,9 +125,9 @@ type Raft struct {
 	me    int                 // this peer's index into peers[]
 
 	/* 持久性状态 */
-	currentTerm int      // 服务器已知最新的任期
-	votedFor    int      /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
-	log         RaftLogs /* 日志条目 <command,term> + index */
+	CurrentTerm int      // 服务器已知最新的任期
+	VotedFor    int      /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
+	Log         RaftLogs /* 日志条目 <command,term> + index */
 	/* 持久化层 */
 	persister *Persister // Object to hold this peer's persisted state
 
@@ -226,19 +226,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	if !rf.killed() {
 		rf.mu.Lock()
 		/* 向当前服务器添加日志项 */
-		term = rf.currentTerm
+		term = rf.CurrentTerm
 		isLeader = rf.state == Leader
 		if isLeader {
-			logEntry := RaftLog{command, term, rf.log.Len()}
-			rf.log.Entries = append(rf.log.Entries, logEntry)
+			logEntry := RaftLog{command, term, rf.Log.Len()}
+			rf.Log.Entries = append(rf.Log.Entries, logEntry)
 			index = logEntry.LogicIndex
 			rf.DebugWithLock("start log: %+v in index(%d)", logEntry, index)
 			rf.matchIndex[rf.me] = index
-			// begin := time.Now()
-			// defer func() {
-			// 	end := time.Now()
-			// 	DPrintf("persist %dms", (end.Sub(begin)).Milliseconds())
-			// }()
 			rf.persist()
 			/* 非阻塞防止死锁 */
 			go func() { rf.signalHeartBeatTickerCh <- interface{}(nil) }()

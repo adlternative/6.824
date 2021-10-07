@@ -1,15 +1,13 @@
 package kvraft
 
 import (
-	"log"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
 	"github.com/jwangsadinata/go-multimap/slicemultimap"
+	"log"
+	"sync"
+	"sync/atomic"
 )
 
 const Debug = false
@@ -96,8 +94,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
-	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
-	defer leaseTimeOut.Stop()
+	// leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	// defer leaseTimeOut.Stop()
 
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
@@ -123,10 +121,10 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Error = msg.Error
 			reply.Value = msg.ResultValue
 		}
-	case <-leaseTimeOut.C:
-		kv.mu.Lock()
-		DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
-		reply.Error = ErrTimeOut
+		// case <-leaseTimeOut.C:
+		// kv.mu.Lock()
+		// DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
+		// reply.Error = ErrTimeOut
 	}
 	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 	kv.mu.Unlock()
@@ -166,8 +164,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 	}
 
-	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
-	defer leaseTimeOut.Stop()
+	// leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	// defer leaseTimeOut.Stop()
 	_, oldTerm, isLeader := kv.rf.Start(op)
 	if !isLeader {
 		DPrintf("KV[%d] want start %+v ,but it's not a Leader\n", kv.me, op)
@@ -191,10 +189,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		} else {
 			reply.Error = (string)(msg.Error)
 		}
-	case <-leaseTimeOut.C:
-		kv.mu.Lock()
-		DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
-		reply.Error = ErrTimeOut
+		// case <-leaseTimeOut.C:
+		// kv.mu.Lock()
+		// DPrintf("KV[%d] will send TimeOutEvent to C[%d] Seq[%d]", kv.me, args.ClientId, args.Seq)
+		// reply.Error = ErrTimeOut
 	}
 	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 	kv.mu.Unlock()
