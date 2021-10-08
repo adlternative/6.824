@@ -283,6 +283,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
+	rf.initWaitGroup.Wait()
 
 	for !rf.killed() {
 		<-rf.signalApplyCh

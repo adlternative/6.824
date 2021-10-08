@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/sasha-s/go-deadlock"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -147,7 +148,7 @@ type Raft struct {
 	resetTimerCh            chan interface{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
 	signalApplyCh           chan interface{} // 用来通知 applyCh 可以提交日志条目了
 	signalHeartBeatTickerCh chan interface{} // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
-	snapShotMayMatchIndex   int              /* 用一个共享变量进行通信吧 */
+	initWaitGroup           sync.WaitGroup
 
 	/* 超时管理 */
 	SendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
@@ -243,7 +244,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 	return index, term, isLeader
 }
-
 
 //
 // the tester doesn't halt goroutines created by Raft after each test,

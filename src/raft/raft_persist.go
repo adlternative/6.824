@@ -35,6 +35,8 @@ func (rf *Raft) persistStateAndSnapShot(snapshot []byte) {
 // 恢复之前持久化的状态。
 //WWW
 func (rf *Raft) readPersist(data []byte) {
+	rf.initWaitGroup.Add(1)
+
 	defer func() {
 		log.Printf("S[%03d] [INIT] log=%+v CurrentTerm=%v VotedFor=%v\n", rf.me, rf.Log, rf.CurrentTerm, rf.VotedFor)
 	}()
@@ -45,6 +47,8 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.Log.LastIncludedTerm = -1
 		rf.CurrentTerm = 0
 		rf.VotedFor = -1
+		rf.haveInit = true
+		rf.initWaitGroup.Done()
 		return
 	}
 
@@ -63,8 +67,8 @@ func (rf *Raft) readPersist(data []byte) {
 		lastIncludedTerm := rf.Log.LastIncludedTerm
 		lastIncludedIndex := rf.Log.LastIncludedIndex
 
-		Logs.LastIncludedTerm = -1
-		Logs.LastIncludedIndex = -1
+		rf.Log.LastIncludedTerm = -1
+		rf.Log.LastIncludedIndex = -1
 
 		if rf.Log.Entries == nil {
 			log.Printf("eh? log.Entries is nil?\n")
@@ -84,6 +88,9 @@ func (rf *Raft) readPersist(data []byte) {
 				SnapshotIndex: lastIncludedIndex,
 			}
 			go func() { rf.applyCh <- *msg }()
+		} else {
+			rf.initWaitGroup.Done()
+			rf.haveInit = true
 		}
 		rf.mu.Unlock()
 	}

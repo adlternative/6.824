@@ -34,6 +34,7 @@ type RequestVoteReply struct {
 // heartsbeats recently.
 
 func (rf *Raft) ticker() {
+	rf.initWaitGroup.Wait()
 
 	timeout := time.NewTimer(rf.VoteTimeOut)
 	defer timeout.Stop()
