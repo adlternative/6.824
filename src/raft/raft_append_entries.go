@@ -103,7 +103,7 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 						return
 					}
 					/* =================== */
-					if rf.HandleInstallSnapshot(i, oldTerm, oldState, &heartBeatAckCnt, ctx, cancel, reply) {
+					if rf.HandleInstallSnapshot(i, oldTerm, oldState, &heartBeatAckCnt, ctx, cancel, args, reply) {
 						return
 					}
 				} else {
@@ -283,24 +283,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
-	if rf.killed() {
-		return
-	}
-
-	rf.mu.Lock()
-	/* 如果我们有快照的话？ */
-	if rf.Log.LastIncludedIndex != -1 {
-		msg := &ApplyMsg{
-			CommandValid:  false,
-			SnapshotValid: true,
-			Snapshot:      rf.persister.ReadSnapshot(),
-			SnapshotTerm:  rf.Log.LastIncludedTerm,
-			SnapshotIndex: rf.Log.LastIncludedIndex,
-		}
-		rf.applyCh <- *msg
-		rf.snapShotPersistCond.Wait()
-	}
-	rf.mu.Unlock()
 
 	for !rf.killed() {
 		<-rf.signalApplyCh
@@ -328,9 +310,9 @@ func (rf *Raft) ApplyCommittedMsgs() {
 	}
 }
 
-func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState State,
+func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 	heartBeatAckCnt *int, ctx context.Context, cancel context.CancelFunc,
-	reply *AppendEntriesReply, needRetry bool) bool {
+	reply *AppendEntriesReply) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 领导者状态已经发生改变 */
@@ -358,7 +340,7 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 		rf.DebugWithLock("matchIndex=%+v commitIndex=%d", rf.matchIndex, rf.commitIndex)
 		/* 如果返回的 MATCHINDEX 是在快照中 直接返回，并决定是否需要重试（而不用做下面的提交了） */
 		if rf.Log.isIndexInSnapShot(rf.matchIndex[i]) {
-			return !needRetry
+			return false
 		}
 
 		/* if rf.matchIndex[i] <= lastIncludeIndex */
@@ -396,12 +378,6 @@ func (rf *Raft) handleApplyEntriesOrInstallSnapShot(i int, oldTerm int, oldState
 	} else {
 		/* 降低 nextIndex*/
 		rf.nextIndex[i] = reply.MayMatchIndex + 1
-		return !needRetry
+		return false
 	}
-}
-
-func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
-	heartBeatAckCnt *int, ctx context.Context, cancel context.CancelFunc,
-	reply *AppendEntriesReply) bool {
-	return rf.handleApplyEntriesOrInstallSnapShot(i, oldTerm, oldState, heartBeatAckCnt, ctx, cancel, reply, true)
 }

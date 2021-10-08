@@ -34,13 +34,6 @@ type RequestVoteReply struct {
 // heartsbeats recently.
 
 func (rf *Raft) ticker() {
-	atomic.AddInt32(&rf.routineCnt, 1)
-	defer atomic.AddInt32(&rf.routineCnt, -1)
-
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-	// }
 
 	timeout := time.NewTimer(rf.VoteTimeOut)
 	defer timeout.Stop()
@@ -64,11 +57,6 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
-	// if pc, _, _, ok := runtime.Caller(0); ok {
-	// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-	// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-	// }
-
 	var voteCnt int
 	rf.mu.Lock()
 	if rf.state == Leader {

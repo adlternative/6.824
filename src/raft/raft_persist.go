@@ -60,15 +60,31 @@ func (rf *Raft) readPersist(data []byte) {
 		log.Fatalf("failed to readPersist")
 	} else {
 		rf.Log = Logs
+		lastIncludedTerm := rf.Log.LastIncludedTerm
+		lastIncludedIndex := rf.Log.LastIncludedIndex
+
+		Logs.LastIncludedTerm = -1
+		Logs.LastIncludedIndex = -1
+
 		if rf.Log.Entries == nil {
 			log.Printf("eh? log.Entries is nil?\n")
 			rf.Log.Entries = []RaftLog{}
 		}
 		rf.CurrentTerm = CurrentTerm
 		rf.VotedFor = VotedFor
-		if rf.Log.LastIncludedIndex != -1 {
-			rf.commitIndex = rf.Log.LastIncludedIndex
-			rf.lastApplied = rf.Log.LastIncludedIndex
+
+		rf.mu.Lock()
+		/* 如果我们有快照的话？ */
+		if lastIncludedIndex != -1 {
+			msg := &ApplyMsg{
+				CommandValid:  false,
+				SnapshotValid: true,
+				Snapshot:      rf.persister.ReadSnapshot(),
+				SnapshotTerm:  lastIncludedTerm,
+				SnapshotIndex: lastIncludedIndex,
+			}
+			go func() { rf.applyCh <- *msg }()
 		}
+		rf.mu.Unlock()
 	}
 }
