@@ -75,6 +75,7 @@ func (rf *Raft) HandleInstallSnapshot(i int, oldTerm int, oldState State,
 
 /* InstallSnapshot  */
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.DebugWithLock("GET T[%d] S[%d] IS args:%#v", args.Term, args.LeaderId, args)
@@ -175,7 +176,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 		rf.commitIndex = lastIncludedIndex
 		rf.lastApplied = lastIncludedIndex
 		rf.haveInit = true
-		rf.initWaitGroup.Done()
+		rf.InitWaitGroup.Done()
 	}
 	return true
 }

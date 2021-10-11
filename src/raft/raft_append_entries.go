@@ -12,8 +12,8 @@ type AppendEntriesArgs struct {
 	LeaderId     int       /* 领导者人的 ID */
 	PrevLogIndex int       /* 领导者人发送的新日志的前一条日志索引 */
 	PrevLogTerm  int       /* 领导者人发送的新日志的前一条日志任期 */
-	Entries      []RaftLog /* 领导者人发送的新日志 */
 	LeaderCommit int       /* 领导者人的最后一条日志的索引 */
+	Entries      []RaftLog /* 领导者人发送的新日志 */
 }
 
 type AppendEntriesReply struct {
@@ -116,8 +116,9 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 
 					args.PrevLogIndex = logicPrevLogIndex
 					args.PrevLogTerm = rf.Log.TermOf(logicPrevLogIndex)
-					args.Entries = make([]RaftLog, len(rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]))
-					copy(args.Entries, rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):])
+					args.Entries = append([]RaftLog(nil), rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]...)
+
+					log.Printf("S[%d]: HeartBeatTimeOutCallBack:args=%+v?", rf.me, args)
 
 					rf.DebugWithLock("want to send logs(%d,%d):%v to S[%d]",
 						rf.Log.getEntryIndex(rf.nextIndex[i]),
@@ -147,10 +148,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	/* 等待初始化? */
+	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.DebugWithLock("args=%+v", args)
+	log.Printf("%#v", args.Term)
+	log.Printf("%#v", args.LeaderId)
+	log.Printf("%#v", args.PrevLogIndex)
+	log.Printf("%#v", args.PrevLogTerm)
+	log.Printf("%#v", args.LeaderCommit)
+	log.Printf("%#v", args.Entries)
 
 	needPersist := false
 
@@ -283,7 +291,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
-	rf.initWaitGroup.Wait()
+	rf.InitWaitGroup.Wait()
 
 	for !rf.killed() {
 		<-rf.signalApplyCh

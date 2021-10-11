@@ -123,6 +123,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 	DPrintf("KV[%d] will send %s to C[%d] Seq[%d]", kv.me, ctx, args.ClientId, args.Seq)
 	kv.mu.Lock()
+	if kv.activeClients[args.ClientId].NoticeChMap == nil {
+		log.Printf("Eh? kv.activeClients[args.ClientId].NoticeChMap == nil")
+	}
 	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
 }
 
@@ -184,7 +187,15 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	DPrintf("KV[%d] will send %s to C[%d] Seq[%d]", kv.me, ctx, args.ClientId, args.Seq)
 	kv.mu.Lock()
-	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
+
+	if activeClient, ok := kv.activeClients[args.ClientId]; ok {
+		if activeClient.NoticeChMap == nil {
+			log.Printf("Eh? kv.activeClients[args.ClientId].NoticeChMap == nil")
+		} else {
+			activeClient.NoticeChMap.Remove(args.Seq, noticeChs)
+		}
+	}
+
 }
 
 //
@@ -226,16 +237,23 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(raft.RaftLog{})
+	labgob.Register(raft.RaftLogs{})
 
 	kv := new(KVServer)
 	kv.me = me
+	kv.dead = 0
+	kv.maxraftstate = -1
 	kv.maxraftstate = maxraftstate
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf.InitWaitGroup.Wait()
+
 	kv.memTable = make(map[string]string)
 	/* 暂且不考虑 kv.ClientsOpRecord 的崩溃恢复，因为日志反正都是会重放的， */
 	kv.ClientsOpRecord = make(map[int64]*ClientsOpRecord)
 	kv.activeClients = make(map[int64]*ActiveClient)
+
 	go func() {
 		wait_ch := make(chan interface{})
 		kv.rf.RegisterNotLeaderNowCh(wait_ch)

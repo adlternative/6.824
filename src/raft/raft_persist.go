@@ -12,12 +12,27 @@ import (
 // 参见论文的图 2 了解什么应该是持久化的。
 //
 func (rf *Raft) stateEncode() []byte {
+
+	if rf == nil {
+		log.Printf("S[%d] Eh? rf== nil", rf.me)
+	} else {
+		if rf.Log.Entries == nil {
+			log.Printf("S[%d] Eh? rf.Log.Entries == nil", rf.me)
+		} else {
+			log.Printf("S[%d] #len(rf.log.Entries)=%v rf.CurrentTerm=%v rf.VotedFor=%v",
+				rf.me, len(rf.Log.Entries), rf.CurrentTerm, rf.VotedFor)
+		}
+	}
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
-	e.Encode(rf.CurrentTerm)
-	e.Encode(rf.VotedFor)
-	e.Encode(rf.Log)
-	// defer log.Printf("#rf.log=%+v rf.CurrentTerm=%v rf.VotedFor=%v", rf.Log, rf.CurrentTerm, rf.VotedFor)
+
+	if e.Encode(rf.CurrentTerm) != nil ||
+		e.Encode(rf.VotedFor) != nil ||
+		e.Encode(rf.Log) != nil {
+		log.Fatalf("failed to stateEncode")
+	}
+
 	return w.Bytes()
 }
 
@@ -35,8 +50,6 @@ func (rf *Raft) persistStateAndSnapShot(snapshot []byte) {
 // 恢复之前持久化的状态。
 //WWW
 func (rf *Raft) readPersist(data []byte) {
-	rf.initWaitGroup.Add(1)
-
 	defer func() {
 		log.Printf("S[%03d] [INIT] log=%+v CurrentTerm=%v VotedFor=%v\n", rf.me, rf.Log, rf.CurrentTerm, rf.VotedFor)
 	}()
@@ -48,7 +61,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.CurrentTerm = 0
 		rf.VotedFor = -1
 		rf.haveInit = true
-		rf.initWaitGroup.Done()
+		rf.InitWaitGroup.Done()
 		return
 	}
 
@@ -89,7 +102,7 @@ func (rf *Raft) readPersist(data []byte) {
 			}
 			go func() { rf.applyCh <- *msg }()
 		} else {
-			rf.initWaitGroup.Done()
+			rf.InitWaitGroup.Done()
 			rf.haveInit = true
 		}
 		rf.mu.Unlock()

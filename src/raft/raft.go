@@ -148,7 +148,7 @@ type Raft struct {
 	resetTimerCh            chan interface{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
 	signalApplyCh           chan interface{} // 用来通知 applyCh 可以提交日志条目了
 	signalHeartBeatTickerCh chan interface{} // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
-	initWaitGroup           sync.WaitGroup
+	InitWaitGroup           sync.WaitGroup
 
 	/* 超时管理 */
 	SendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
@@ -180,6 +180,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	/* raft state init */
 	rf := &Raft{}
 	rf.haveInit = false
+	rf.InitWaitGroup.Add(1)
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
