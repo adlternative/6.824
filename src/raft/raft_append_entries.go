@@ -8,14 +8,13 @@ import (
 )
 
 const (
-	OK        = iota
-	ErrOldRPC = iota
+	OK = iota
+	ErrOldRPC
 	ErrSnapshotMismatch
 	ErrLogMismatch
 	ErrTermTooSmall
 	ErrPrevLogIndexTooBig
 	ErrPrevLogIndexTooSmall
-	ErrFollowerHaveMoreLog
 )
 
 type AppendEntriesArgs struct {
@@ -275,8 +274,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 	} else {
-		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) )*/
-		/* 如果和日志有不相同的点则去除冲突项 */
+		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries)]*/
 		i := 0
 		for ; i < len(args.Entries); i++ {
 			pos := i + args.PrevLogIndex + 1
@@ -302,16 +300,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex+1)]
 				needPersist = true
 			} else if oldTerm == args.Term {
-				if i+args.PrevLogIndex+1 < rf.Log.Len() {
-					/* 此时 follower 的内容更多, follower 保留当前日志并返回错误 */
-					reply.Success = false
-					reply.Error = ErrFollowerHaveMoreLog
-					reply.MayMatchIndex = rf.Log.Len() - 1
-					return
-				} else if i+args.PrevLogIndex+1 == rf.Log.Len() {
-					/* 此时 内容相同 nothing to do*/
+				/* args 最后一项的index >= rf.commitIndex  ，说明可以截断到最后一项 */
+				needPersist = true
+				if len(args.Entries)+args.PrevLogIndex >= rf.commitIndex {
+					rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex)+1]
 				} else {
-					/* will not happen */
+					/* args 最后一项的index < rf.commitIndex  ，说明可以截断到最后一项 */
+					rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(rf.commitIndex)+1]
 				}
 			}
 		}
@@ -436,13 +431,6 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 
 		if reply.Error == ErrOldRPC {
 			log.Printf("match:%+v next:%+v len:%+v", rf.matchIndex, rf.nextIndex, rf.Log.Len())
-			return true
-		} else if reply.Error == ErrFollowerHaveMoreLog {
-			log.Printf("S[%d]: Follower S[%d] have more log:len(%d)", rf.me, i, reply.MayMatchIndex+1)
-			rf.ResetToFollowerWithLock(fmt.Sprintf("log.len < S[%d] len(%d) 不配当领导者", i, reply.MayMatchIndex+1))
-			rf.VotedFor = -1
-			rf.persist()
-			cancel()
 			return true
 		} else {
 			/* 降低 nextIndex*/
