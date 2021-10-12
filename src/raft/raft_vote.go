@@ -87,10 +87,6 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 			defer atomic.AddInt32(&rf.routineCnt, -1)
 
 			rf.mu.Lock()
-			// if pc, _, _, ok := runtime.Caller(0); ok {
-			// 	rf.logger.Infof("[%d] %s: begin", rf.me, Trace(pc))
-			// 	defer rf.logger.Infof("[%d] %s: end", rf.me, Trace(pc))
-			// }
 			/* 选举状态已经发生改变 */
 			if changed, _, _ := rf.AreStateOrTermChangeWithLock(oldTerm, oldState); changed {
 				rf.DebugWithLock("VoteTimeOutSendVote: state changed!")
@@ -252,7 +248,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-/* 参选者的日志是否更加新？ */
+/* 参选者的日志是否更加新(不旧)？ */
 func (rf *Raft) ArelogNewerWithLock(args *RequestVoteArgs) (bool, string) {
 	/* 先比任期 */
 	/* assert(rf.log.Len()>0) */

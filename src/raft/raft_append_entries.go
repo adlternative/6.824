@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+const (
+	OK        = iota
+	ErrOldRPC = iota
+	ErrSnapshotMismatch
+	ErrLogMismatch
+	ErrTermTooSmall
+	ErrPrevLogIndexTooBig
+	ErrPrevLogIndexTooSmall
+	ErrFollowerHaveMoreLog
+)
+
 type AppendEntriesArgs struct {
 	Term         int       /* 领导者人的任期 */
 	LeaderId     int       /* 领导者人的 ID */
@@ -20,6 +31,7 @@ type AppendEntriesReply struct {
 	Term          int  /* 跟随者的任期 */
 	Success       bool /* 跟随者成功添加日志项*/
 	MayMatchIndex int  /* 跟随者的最后日志索引 */
+	Error         int  /* 错误信息 */
 }
 
 /* leader 才可以定期发送心跳包 */
@@ -112,18 +124,16 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 						Term:         rf.CurrentTerm,
 						LeaderId:     rf.me,
 						LeaderCommit: rf.commitIndex,
+						PrevLogIndex: logicPrevLogIndex,
+						PrevLogTerm:  rf.Log.TermOf(logicPrevLogIndex),
+						Entries:      append([]RaftLog(nil), rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]...),
 					}
 
-					args.PrevLogIndex = logicPrevLogIndex
-					args.PrevLogTerm = rf.Log.TermOf(logicPrevLogIndex)
-					args.Entries = append([]RaftLog(nil), rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]...)
+					// log.Printf("S[%d] [SEND]:args=%+v?", rf.me, args)
 
-					log.Printf("S[%d]: HeartBeatTimeOutCallBack:args=%+v?", rf.me, args)
-
-					rf.DebugWithLock("want to send logs(%d,%d):%v to S[%d]",
+					rf.DebugWithLock("want to send logs(%d,%d) to S[%d]",
 						rf.Log.getEntryIndex(rf.nextIndex[i]),
-						rf.Log.getEntryIndex(rf.nextIndex[i])+len(args.Entries),
-						args.Entries, i)
+						rf.Log.getEntryIndex(rf.nextIndex[i])+len(args.Entries), i)
 
 					rf.mu.Unlock()
 					/* ==========UNLOCK SPACE========= */
@@ -152,15 +162,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	log.Printf("%#v", args.Term)
-	log.Printf("%#v", args.LeaderId)
-	log.Printf("%#v", args.PrevLogIndex)
-	log.Printf("%#v", args.PrevLogTerm)
-	log.Printf("%#v", args.LeaderCommit)
-	log.Printf("%#v", args.Entries)
-
+	log.Printf("S[%d] [RECV]", rf.me)
+	defer func() { log.Printf("S[%d] reply with %+v", rf.me, reply) }()
 	needPersist := false
+	defer func() {
+		if needPersist {
+			rf.persist()
+		}
+	}()
+
+	oldTerm := rf.CurrentTerm
+
+	if args.Entries == nil || len(args.Entries) == 0 {
+		rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
+	} else {
+		rf.DebugWithLock("get log entries from S[%d]", args.LeaderId)
+	}
 
 	/* 设置返回值为 follower 的任期 */
 	reply.Term = rf.CurrentTerm
@@ -168,12 +185,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		/* 1. 如果领导者的任期 小于 接收者的当前任期 返回假 */
 		rf.DebugWithLock("[reject AE]: 领导者的任期 %v 小于 接收者的当前任期 %v", args.Term, rf.CurrentTerm)
 		reply.Success = false
+		reply.Error = ErrTermTooSmall
 		return
 	} else if args.Term > rf.CurrentTerm {
 		/* 2. 如果领导者的任期比自己的高，更新自己任期 */
 		rf.ResetToFollowerWithLock(fmt.Sprintf("GET T[%d] S[%d] AE", args.Term, args.LeaderId))
 		rf.VotedFor = -1
 		rf.CurrentTerm = args.Term
+		/*如果 leader 的 term 比我大，但发送的日志比较旧， 截断日志 */
 		needPersist = true
 	} else {
 		/* ASSERT(rf.CurrentTerm == args.Term) */
@@ -195,6 +214,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		/*  1> prevlogindex 竟然超过了 日志总长度 -1
 		那么说明我们的leader 太超前， matchindex 设置为  len -1 */
 		reply.Success = false
+		reply.Error = ErrPrevLogIndexTooBig
 		reply.MayMatchIndex = rf.Log.Len() - 1
 		rf.DebugWithLock("[reject AE]: args.PrevLogIndex=%d > rf.log.Len()-1=%d, so leader to need to turn down prelogindex", args.PrevLogIndex, rf.Log.Len()-1)
 	} else if args.PrevLogIndex < rf.Log.LastIncludedIndex {
@@ -204,6 +224,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		 * (unlikely)
 		 */
 		reply.Success = false
+		reply.Error = ErrPrevLogIndexTooSmall
 		reply.MayMatchIndex = args.PrevLogIndex
 		rf.DebugWithLock("[reject AE]: args.PrevLogIndex=%d < rf.log.LastIncludedIndex=%d, so leader may need to send snapshot again", args.PrevLogIndex, rf.Log.LastIncludedIndex)
 	} else if args.PrevLogIndex == rf.Log.LastIncludedIndex &&
@@ -212,21 +233,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		 * (leader 说不定需要重新发送快照)
 		 * (unlikely)
 		 */
-		reply.Success = false
-		if args.PrevLogIndex == 0 {
+		if args.PrevLogIndex <= 0 {
 			rf.FatalWithLock("[BUG] args.PrevLogIndex <= 0 "+
 				"and args.PrevLogTerm (%d) not match with"+
 				" rf.log.LastIncludedTerm (%d)", args.PrevLogIndex,
 				rf.Log.LastIncludedTerm)
-		} else {
-			reply.MayMatchIndex = args.PrevLogIndex - 1
-			rf.DebugWithLock("[reject AE]: args.PrevLogTerm=%d != rf.log.LastIncludedTerm=%d, so leader may should send snapshot again", args.PrevLogIndex, rf.Log.LastIncludedTerm)
 		}
+		reply.Success = false
+		reply.Error = ErrSnapshotMismatch
+		reply.MayMatchIndex = args.PrevLogIndex - 1
+		rf.DebugWithLock("[reject AE]: args.PrevLogTerm=%d != rf.log.LastIncludedTerm=%d, so leader may should send snapshot again", args.PrevLogIndex, rf.Log.LastIncludedTerm)
 	} else if args.PrevLogIndex > rf.Log.LastIncludedIndex &&
 		args.PrevLogTerm != rf.Log.TermOf(args.PrevLogIndex) {
 		/* 4> 日志不匹配 */
 		rf.DebugWithLock("[reject AE]: because args.PrevLogTerm=%d != rf.log.TermOf(args.PrevLogIndex)=%d", args.PrevLogTerm, rf.Log.TermOf(args.PrevLogIndex))
 		reply.Success = false
+		reply.Error = ErrLogMismatch
 		i := args.PrevLogIndex - 1
 		/* 1> 过了日志总长度 return 也许匹配到 总长度-1 */
 		for ; i >= rf.Log.LastIncludedIndex+1; i-- {
@@ -253,25 +275,45 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 	} else {
-		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) ] */
-		/* rf.log[PrevLogIndex + 1:] 都是冲突项 */
-		/* 去除冲突项 */
-		if rf.Log.Len() != args.PrevLogIndex+1 {
-			rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(args.PrevLogIndex+1)]
-			needPersist = true
+		/* 发过来的坐标是 [PrevLogIndex + 1, PrevLogIndex + len(arg.Entries) )*/
+		/* 如果和日志有不相同的点则去除冲突项 */
+		i := 0
+		for ; i < len(args.Entries); i++ {
+			pos := i + args.PrevLogIndex + 1
+			if (pos < rf.Log.Len()) && (rf.Log.TermOf(pos) == args.Entries[i].Term) {
+				/* 寻找第一个不同点 */
+				continue
+			} else if pos >= rf.Log.Len() {
+				/* 到达日志末尾，说明 args 更多 */
+				rf.Log.Entries = append(rf.Log.Entries, args.Entries[i:]...)
+				needPersist = true
+				break
+			} else if rf.Log.TermOf(pos) != args.Entries[i].Term {
+				/* 说明出现了不同的地方，去重并追加*/
+				rf.Log.Entries = append(rf.Log.Entries[:rf.Log.getEntryIndex(pos)], args.Entries[i:]...)
+				needPersist = true
+				break
+			}
 		}
 
-		if args.Entries == nil || len(args.Entries) == 0 {
-			rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
-		} else {
-			rf.DebugWithLock("get log entries from S[%d]", args.LeaderId)
-			/* 后添新项 */
-			rf.Log.Entries = append(rf.Log.Entries, args.Entries...)
-			needPersist = true
-			rf.DebugWithLock("append logs:%v from S[%d]", args.Entries, args.LeaderId)
-		}
-		if needPersist {
-			rf.persist()
+		if i == len(args.Entries) {
+			if oldTerm < args.Term {
+				/* 说明 新LEADER的日志比该节点少，截断当前节点到 arg */
+				rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex+1)]
+				needPersist = true
+			} else if oldTerm == args.Term {
+				if i+args.PrevLogIndex+1 < rf.Log.Len() {
+					/* 此时 follower 的内容更多, follower 保留当前日志并返回错误 */
+					reply.Success = false
+					reply.Error = ErrFollowerHaveMoreLog
+					reply.MayMatchIndex = rf.Log.Len() - 1
+					return
+				} else if i+args.PrevLogIndex+1 == rf.Log.Len() {
+					/* 此时 内容相同 nothing to do*/
+				} else {
+					/* will not happen */
+				}
+			}
 		}
 
 		rf.DebugWithLock("args.LeaderCommit=%v rf.log.Len()-1=%v rf.lastApplied=%v",
@@ -330,10 +372,16 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 		cancel()
 		return true
 	}
-	rf.DebugWithLock("i:%d reply:%+v", i, reply)
+	rf.DebugWithLock("get S[%d] ApplyEntries reply:%+v", i, reply)
 	if reply.Success {
 		*heartBeatAckCnt++
 		rf.DebugWithLock("get heartBeatAck from S[%d], now it get %d Ack", i, *heartBeatAckCnt)
+
+		if reply.MayMatchIndex < rf.matchIndex[i] {
+			/* 说明是旧的 RPC 回复 */
+			rf.DebugWithLock("get old reply from S[%d]", i)
+			return true
+		}
 
 		/* 更新 matchIndex AND nextIndex */
 		rf.matchIndex[i] = reply.MayMatchIndex
@@ -341,8 +389,7 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 
 		if rf.nextIndex[i] > rf.Log.Len() { //debug
 			cancel()
-			log.Fatalf("[BUG] rf.nextIndex[%d]=%d >rf.log.Len()=%d",
-				i, rf.nextIndex[i], rf.Log.Len())
+			log.Fatalf("[BUG] rf.nextIndex[%d]=%d >rf.log.Len()=%d", i, rf.nextIndex[i], rf.Log.Len())
 		}
 
 		// rf.DebugWithLock("rf.log=%+v", rf.Log)
@@ -375,18 +422,32 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 			}
 		}
 		return true
-	} else if reply.Term > rf.CurrentTerm {
-		/* 任期小 不配当领导者 */
-		/* 变回 跟随者 */
-		rf.ResetToFollowerWithLock(fmt.Sprintf("小于 S[%d]任期 T[%d] 不配当领导者", i, reply.Term))
-		rf.VotedFor = -1
-		rf.CurrentTerm = reply.Term /* 更新任期 */
-		rf.persist()
-		cancel()
-		return true
 	} else {
-		/* 降低 nextIndex*/
-		rf.nextIndex[i] = reply.MayMatchIndex + 1
-		return false
+		if reply.Term > rf.CurrentTerm {
+			/* 任期小 不配当领导者 */
+			/* 变回 跟随者 */
+			rf.ResetToFollowerWithLock(fmt.Sprintf("小于 S[%d]任期 T[%d] 不配当领导者", i, reply.Term))
+			rf.VotedFor = -1
+			rf.CurrentTerm = reply.Term /* 更新任期 */
+			rf.persist()
+			cancel()
+			return true
+		}
+
+		if reply.Error == ErrOldRPC {
+			log.Printf("match:%+v next:%+v len:%+v", rf.matchIndex, rf.nextIndex, rf.Log.Len())
+			return true
+		} else if reply.Error == ErrFollowerHaveMoreLog {
+			log.Printf("S[%d]: Follower S[%d] have more log:len(%d)", rf.me, i, reply.MayMatchIndex+1)
+			rf.ResetToFollowerWithLock(fmt.Sprintf("log.len < S[%d] len(%d) 不配当领导者", i, reply.MayMatchIndex+1))
+			rf.VotedFor = -1
+			rf.persist()
+			cancel()
+			return true
+		} else {
+			/* 降低 nextIndex*/
+			rf.nextIndex[i] = reply.MayMatchIndex + 1
+			return false
+		}
 	}
 }
