@@ -1,7 +1,7 @@
 package kvraft
 
 import (
-	"fmt"
+	// "fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -10,11 +10,9 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"github.com/jwangsadinata/go-multimap"
-	"github.com/jwangsadinata/go-multimap/slicemultimap"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -42,13 +40,13 @@ type ClientsOpRecord struct {
 }
 
 type NoticeCh struct {
-	ApplyMsgChs       chan *ClientsOpRecord
-	NotLeaderEventChs chan interface{}
+	ApplyMsgCh       chan *ClientsOpRecord
+	NotLeaderEventCh chan interface{}
 }
 
 type ActiveClient struct {
-	ClientId    int64
-	NoticeChMap *slicemultimap.MultiMap
+	ClientId  int64
+	NoticeChs *NoticeCh
 }
 
 type KVServer struct {
@@ -60,15 +58,15 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	memTable        map[string]string          /* 服务器状态机 */
-	ClientsOpRecord map[int64]*ClientsOpRecord /* 客户端的最后请求的历史记录（后期可以修改为所有的历史记录） */
-	activeClients   map[int64]*ActiveClient    /* clientId -> activeClient */
+	KVTable         map[string]string          /* 服务器状态机 */
+	ClientsOpRecord map[int64]*ClientsOpRecord /* clientId -> lastClientOpRecord 客户端的最后请求的历史记录（后期可以修改为所有的历史记录） */
+	ActiveClients   map[int64]*ActiveClient    /* clientId -> activeClient */
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	/* 幂等操作处理 */
+	/* 如果保留的客户最后一条记录 seq  和当前rpc相同，则直接返回记录值 */
 	if record, ok := kv.ClientsOpRecord[args.ClientId]; ok && record.Op.Seq == args.Seq {
 		reply.Error = record.Error
 		reply.Value = record.ResultValue
@@ -86,14 +84,20 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	notLeaderEventCh := make(chan interface{}, 1)
 	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
 	/* 活跃客户端 */
-	if _, ok := kv.activeClients[args.ClientId]; !ok {
+	if c, ok := kv.ActiveClients[args.ClientId]; !ok {
+		/* 如果不存在该客户端 */
 		client := &ActiveClient{
-			ClientId:    args.ClientId,
-			NoticeChMap: slicemultimap.New(),
+			ClientId:  args.ClientId,
+			NoticeChs: noticeChs,
 		}
-		kv.activeClients[args.ClientId] = client
+		kv.ActiveClients[args.ClientId] = client
+	} else {
+		/* 由于这里不允许单个客户端发送多个请求rpc，
+		此时这个rpc超时会直接返回，那咱就不多余处理了 */
+		// if c.NoticeChs != nil {
+		// }
+		c.NoticeChs = noticeChs
 	}
-	kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 
 	/* 开启定时器（租约） */
 	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
@@ -101,39 +105,32 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	/* 添加命令到 raft 日志中 */
 	_, _, isLeader := kv.rf.Start(op)
 
-	var ctx string
 	kv.mu.Unlock()
 	if !isLeader {
-		ctx = "notLeaderEvent"
 		reply.Error = ErrWrongLeader
 	} else {
 		/* 等待 raft 处理 */
 		select {
 		case <-notLeaderEventCh:
-			ctx = "notLeaderEvent"
 			reply.Error = ErrWrongLeader
 		case msg := <-applyMsgCh:
-			ctx = fmt.Sprintf("Get reply %+v", reply)
 			reply.Error = msg.Error
 			reply.Value = msg.ResultValue
 		case <-leaseTimeOut.C:
-			ctx = "TimeOutEvent"
 			reply.Error = ErrTimeOut
 		}
 	}
-	DPrintf("KV[%d] will send %s to C[%d] Seq[%d]", kv.me, ctx, args.ClientId, args.Seq)
+	DPrintf("KV[%d] will send Get %s Event to C[%d] Seq[%d]", kv.me, reply.Error, args.ClientId, args.Seq)
 	kv.mu.Lock()
-	if kv.activeClients[args.ClientId].NoticeChMap == nil {
-		log.Printf("Eh? kv.activeClients[args.ClientId].NoticeChMap == nil")
-	}
-	kv.activeClients[args.ClientId].NoticeChMap.Remove(args.Seq, noticeChs)
+	/* 删除活跃记录 */
+	delete(kv.ActiveClients, args.ClientId)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	/* 幂等操作处理 */
+	/* 如果保留的客户最后一条记录 seq  和当前rpc相同，则直接返回记录值 */
 	if record, ok := kv.ClientsOpRecord[args.ClientId]; ok && record.Op.Seq == args.Seq {
 		reply.Error = record.Error
 		return
@@ -151,14 +148,20 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	notLeaderEventCh := make(chan interface{}, 1)
 	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
 	/* 活跃客户端 */
-	if _, ok := kv.activeClients[args.ClientId]; !ok {
+	if c, ok := kv.ActiveClients[args.ClientId]; !ok {
+		/* 如果不存在该客户端 */
 		client := &ActiveClient{
-			ClientId:    args.ClientId,
-			NoticeChMap: slicemultimap.New(),
+			ClientId:  args.ClientId,
+			NoticeChs: noticeChs,
 		}
-		kv.activeClients[args.ClientId] = client
+		kv.ActiveClients[args.ClientId] = client
+	} else {
+		/* 由于这里不允许单个客户端发送多个请求rpc，
+		此时这个rpc超时会直接返回，那咱就不多余处理了 */
+		// if c.NoticeChs != nil {
+		// }
+		c.NoticeChs = noticeChs
 	}
-	kv.activeClients[args.ClientId].NoticeChMap.Put(args.Seq, noticeChs)
 
 	/* 开启定时器（租约） */
 	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
@@ -166,36 +169,24 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	/* 添加命令到 raft 日志中 */
 	_, _, isLeader := kv.rf.Start(op)
 
-	var ctx string
 	kv.mu.Unlock()
 	if !isLeader {
-		ctx = "notLeaderEvent"
 		reply.Error = ErrWrongLeader
 	} else {
 		/* 等待 raft 处理 */
 		select {
 		case <-notLeaderEventCh:
-			ctx = "notLeaderEvent"
 			reply.Error = ErrWrongLeader
 		case msg := <-applyMsgCh:
-			ctx = fmt.Sprintf("%v reply %+v", op, reply)
 			reply.Error = msg.Error
 		case <-leaseTimeOut.C:
-			ctx = "TimeOutEvent"
 			reply.Error = ErrTimeOut
 		}
 	}
-	DPrintf("KV[%d] will send %s to C[%d] Seq[%d]", kv.me, ctx, args.ClientId, args.Seq)
+	DPrintf("KV[%d] will send %s %s Event to C[%d] Seq[%d]", kv.me, args.Op, reply.Error, args.ClientId, args.Seq)
 	kv.mu.Lock()
-
-	if activeClient, ok := kv.activeClients[args.ClientId]; ok {
-		if activeClient.NoticeChMap == nil {
-			log.Printf("Eh? kv.activeClients[args.ClientId].NoticeChMap == nil")
-		} else {
-			activeClient.NoticeChMap.Remove(args.Seq, noticeChs)
-		}
-	}
-
+	/* 删除活跃记录 */
+	delete(kv.ActiveClients, args.ClientId)
 }
 
 //
@@ -248,10 +239,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
-	kv.memTable = make(map[string]string)
+	kv.KVTable = make(map[string]string)
 	/* 暂且不考虑 kv.ClientsOpRecord 的崩溃恢复，因为日志反正都是会重放的， */
 	kv.ClientsOpRecord = make(map[int64]*ClientsOpRecord)
-	kv.activeClients = make(map[int64]*ActiveClient)
+	kv.ActiveClients = make(map[int64]*ActiveClient)
 
 	go func() {
 		wait_ch := make(chan interface{})
@@ -260,12 +251,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			DPrintf("KV[%d] wait for NotLeaderEvent", kv.me)
 			<-wait_ch
 			kv.mu.Lock()
-			for _, client := range kv.activeClients {
-				for _, entry := range client.NoticeChMap.Entries() {
-					go func(entry multimap.Entry) {
-						entry.Value.(*NoticeCh).NotLeaderEventChs <- interface{}(nil)
-					}(entry)
-				}
+			for _, client := range kv.ActiveClients {
+				go func(client *ActiveClient) {
+					if client.NoticeChs != nil {
+						client.NoticeChs.NotLeaderEventCh <- interface{}(nil)
+					}
+				}(client)
 			}
 			kv.mu.Unlock()
 		}
@@ -278,16 +269,16 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				cmdOp := msg.Command.(Op)
 				switch cmdOp.Op {
 				case "Get":
-					kv.mu.Lock()
 					var record *ClientsOpRecord
 					ok := false
+					kv.mu.Lock()
 
 					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
 					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
 						/* 否则构造记录 */
 						record = &ClientsOpRecord{Op: cmdOp}
 						/* resultValue 和 err */
-						if value, ok := kv.memTable[cmdOp.Key]; ok {
+						if value, ok := kv.KVTable[cmdOp.Key]; ok {
 							record.ResultValue = value
 							record.Error = OK
 						} else {
@@ -296,30 +287,26 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 						kv.ClientsOpRecord[cmdOp.ClientId] = record
 					}
-					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
-							for _, entry := range entries {
-								go func(entry interface{}) {
-									entry.(*NoticeCh).ApplyMsgChs <- record
-								}(entry)
-							}
+					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+						if activeClient.NoticeChs != nil {
+							activeClient.NoticeChs.ApplyMsgCh <- record
 						}
 					}
 					/* 使用有缓冲区的 channel，
 					即便是对面没有人接受也是可以接受的 */
 					kv.mu.Unlock()
 				case "Put", "Append":
-					kv.mu.Lock()
 					var record *ClientsOpRecord
 					ok := false
+					kv.mu.Lock()
 
 					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
 					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
 						/* 否则构造记录 */
 						if cmdOp.Op == "Append" {
-							kv.memTable[cmdOp.Key] += cmdOp.Value
+							kv.KVTable[cmdOp.Key] += cmdOp.Value
 						} else if cmdOp.Op == "Put" {
-							kv.memTable[cmdOp.Key] = cmdOp.Value
+							kv.KVTable[cmdOp.Key] = cmdOp.Value
 						}
 						record = &ClientsOpRecord{
 							Op:    cmdOp,
@@ -327,14 +314,10 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						}
 						kv.ClientsOpRecord[cmdOp.ClientId] = record
 					}
-					if activeClient, ok := kv.activeClients[cmdOp.ClientId]; ok {
-						if entries, found := activeClient.NoticeChMap.Get(cmdOp.Seq); found {
-							for _, entry := range entries {
-								go func(entry interface{}) {
-									entry.(*NoticeCh).ApplyMsgChs <- record
-								}(entry)
-							}
-						}
+					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+						go func() {
+							activeClient.NoticeChs.ApplyMsgCh <- record
+						}()
 					}
 					kv.mu.Unlock()
 				default:
