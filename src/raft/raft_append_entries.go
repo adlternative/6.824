@@ -171,7 +171,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}()
 
-	oldTerm := rf.CurrentTerm
+	// oldTerm := rf.CurrentTerm
 
 	if args.Entries == nil || len(args.Entries) == 0 {
 		rf.DebugWithLock("get a heartbeat from S[%d]", args.LeaderId)
@@ -296,25 +296,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 
-		if i == len(args.Entries) {
-			if oldTerm < args.Term {
-				/* 说明 新LEADER的日志比该节点少，截断当前节点到 arg */
-				rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex+1)]
-				needPersist = true
-			} else if oldTerm == args.Term {
-				if i+args.PrevLogIndex+1 < rf.Log.Len() {
-					/* 此时 follower 的内容更多, follower 保留当前日志并返回错误 */
-					reply.Success = false
-					reply.Error = ErrFollowerHaveMoreLog
-					reply.MayMatchIndex = rf.Log.Len() - 1
-					return
-				} else if i+args.PrevLogIndex+1 == rf.Log.Len() {
-					/* 此时 内容相同 nothing to do*/
-				} else {
-					/* will not happen */
-				}
-			}
-		}
+		// if i == len(args.Entries) {
+		// 	if oldTerm < args.Term {
+		// 		/* 说明 新LEADER的日志比该节点少，截断当前节点到 arg */
+		// 		rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex+1)]
+		// 		needPersist = true
+		// 	} else if oldTerm == args.Term {
+		// 		/* 				if i+args.PrevLogIndex+1 < rf.Log.Len() {
+		// 			// 此时 follower 的内容更多, follower 保留当前日志并返回错误
+		// 			reply.Success = false
+		// 			reply.Error = ErrFollowerHaveMoreLog
+		// 			reply.MayMatchIndex = rf.Log.Len() - 1
+		// 			return
+		// 		} else */
+		// 		// if i+args.PrevLogIndex+1 == rf.Log.Len() {
+		// 		// 	/* 此时 内容相同 nothing to do*/
+		// 		// } else {
+		// 		// 	/* will not happen */
+		// 		// }
+		// 	}
+		// }
 
 		rf.DebugWithLock("args.LeaderCommit=%v rf.log.Len()-1=%v rf.lastApplied=%v",
 			args.LeaderCommit, rf.Log.Len()-1, rf.lastApplied)
@@ -383,14 +384,16 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 			return true
 		}
 
+		if reply.MayMatchIndex >= rf.Log.Len() {
+			/* JUST RETURN */
+			rf.DebugWithLock("[SPECIAL] get reply from S[%d] mayMatchIndex=%v >= rf.Log.Len()=%v",
+				i, reply.MayMatchIndex, rf.Log.Len())
+			return true
+		}
+
 		/* 更新 matchIndex AND nextIndex */
 		rf.matchIndex[i] = reply.MayMatchIndex
 		rf.nextIndex[i] = rf.matchIndex[i] + 1
-
-		if rf.nextIndex[i] > rf.Log.Len() { //debug
-			cancel()
-			log.Fatalf("[BUG] rf.nextIndex[%d]=%d >rf.log.Len()=%d", i, rf.nextIndex[i], rf.Log.Len())
-		}
 
 		// rf.DebugWithLock("rf.log=%+v", rf.Log)
 		rf.DebugWithLock("matchIndex=%+v commitIndex=%d", rf.matchIndex, rf.commitIndex)
