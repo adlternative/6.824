@@ -3,7 +3,7 @@ package raft
 import (
 	"context"
 	"fmt"
-	"log"
+	// "log"
 	"time"
 )
 
@@ -15,7 +15,6 @@ const (
 	ErrTermTooSmall
 	ErrPrevLogIndexTooBig
 	ErrPrevLogIndexTooSmall
-	ErrFollowerHaveMoreLog
 )
 
 type AppendEntriesArgs struct {
@@ -126,9 +125,8 @@ func (rf *Raft) HeartBeatTimeOutCallBack(ctx context.Context, cancel context.Can
 						LeaderCommit: rf.commitIndex,
 						PrevLogIndex: logicPrevLogIndex,
 						PrevLogTerm:  rf.Log.TermOf(logicPrevLogIndex),
-						Entries:      append([]RaftLog(nil), rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]...),
+						Entries:      append([]RaftLog{}, rf.Log.Entries[rf.Log.getEntryIndex(rf.nextIndex[i]):]...),
 					}
-
 					// log.Printf("S[%d] [SEND]:args=%+v?", rf.me, args)
 
 					rf.DebugWithLock("want to send logs(%d,%d) to S[%d]",
@@ -161,8 +159,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	/* 等待初始化? */
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	log.Printf("S[%d] [RECV]", rf.me)
-	defer func() { log.Printf("S[%d] reply with %+v", rf.me, reply) }()
+	// log.Printf("S[%d] [RECV]:%v", rf.me, args)
+	// defer func() { log.Printf("S[%d] reply with %+v", rf.me, reply) }()
 	needPersist := false
 	defer func() {
 		if needPersist {
@@ -295,27 +293,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 		}
 
-		// if i == len(args.Entries) {
-		// 	if oldTerm < args.Term {
-		// 		/* 说明 新LEADER的日志比该节点少，截断当前节点到 arg */
-		// 		rf.Log.Entries = rf.Log.Entries[:rf.Log.getEntryIndex(len(args.Entries)+args.PrevLogIndex+1)]
-		// 		needPersist = true
-		// 	} else if oldTerm == args.Term {
-		// 		/* 				if i+args.PrevLogIndex+1 < rf.Log.Len() {
-		// 			// 此时 follower 的内容更多, follower 保留当前日志并返回错误
-		// 			reply.Success = false
-		// 			reply.Error = ErrFollowerHaveMoreLog
-		// 			reply.MayMatchIndex = rf.Log.Len() - 1
-		// 			return
-		// 		} else */
-		// 		// if i+args.PrevLogIndex+1 == rf.Log.Len() {
-		// 		// 	/* 此时 内容相同 nothing to do*/
-		// 		// } else {
-		// 		// 	/* will not happen */
-		// 		// }
-		// 	}
-		// }
-
 		rf.DebugWithLock("args.LeaderCommit=%v rf.log.Len()-1=%v rf.lastApplied=%v",
 			args.LeaderCommit, rf.Log.Len()-1, rf.lastApplied)
 
@@ -337,20 +314,19 @@ func (rf *Raft) ApplyCommittedMsgs() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()
 		rf.DebugWithLock("can apply logs wit lock")
-
-		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-			if rf.Log.isIndexInSnapShot(i) {
-				rf.FatalWithLock("[BUG] i=%v rf.log=%+v", i, rf.Log)
+		for rf.lastApplied+1 <= rf.commitIndex {
+			if rf.lastApplied+1 <= rf.Log.LastIncludedIndex {
+				rf.FatalWithLock("[BUG] i=%v rf.log=%+v", rf.lastApplied, rf.Log)
 				break
 			}
 			msg := ApplyMsg{
 				CommandValid:  true,
-				Command:       rf.Log.at(i).Command,
-				CommandIndex:  i,
+				Command:       rf.Log.at(rf.lastApplied + 1).Command,
+				CommandIndex:  rf.lastApplied + 1,
 				SnapshotValid: false,
 			}
 			rf.DebugWithLock("apply msg:%+v", msg)
-			rf.lastApplied = i
+			rf.lastApplied++
 			rf.mu.Unlock()
 			rf.applyCh <- msg
 			rf.mu.Lock()
@@ -435,14 +411,7 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 		}
 
 		if reply.Error == ErrOldRPC {
-			log.Printf("match:%+v next:%+v len:%+v", rf.matchIndex, rf.nextIndex, rf.Log.Len())
-			return true
-		} else if reply.Error == ErrFollowerHaveMoreLog {
-			log.Printf("S[%d]: Follower S[%d] have more log:len(%d)", rf.me, i, reply.MayMatchIndex+1)
-			rf.ResetToFollowerWithLock(fmt.Sprintf("log.len < S[%d] len(%d) 不配当领导者", i, reply.MayMatchIndex+1))
-			rf.VotedFor = -1
-			rf.persist()
-			cancel()
+			// log.Printf("match:%+v next:%+v len:%+v", rf.matchIndex, rf.nextIndex, rf.Log.Len())
 			return true
 		} else {
 			/* 降低 nextIndex*/

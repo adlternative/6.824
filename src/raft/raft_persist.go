@@ -14,13 +14,13 @@ import (
 func (rf *Raft) stateEncode() []byte {
 
 	if rf == nil {
-		log.Printf("S[%d] Eh? rf== nil", rf.me)
+		// log.Printf("S[%d] Eh? rf== nil", rf.me)
 	} else {
 		if rf.Log.Entries == nil {
-			log.Printf("S[%d] Eh? rf.Log.Entries == nil", rf.me)
+			// log.Printf("S[%d] Eh? rf.Log.Entries == nil", rf.me)
 		} else {
-			log.Printf("S[%d] #len(rf.log.Entries)=%v rf.CurrentTerm=%v rf.VotedFor=%v",
-				rf.me, len(rf.Log.Entries), rf.CurrentTerm, rf.VotedFor)
+			// log.Printf("S[%d] #len(rf.log.Entries)=%v rf.CurrentTerm=%v rf.VotedFor=%v",
+			// rf.me, len(rf.Log.Entries), rf.CurrentTerm, rf.VotedFor)
 		}
 	}
 
@@ -53,7 +53,7 @@ func (rf *Raft) readPersist(data []byte) {
 	}()
 
 	if data == nil || len(data) < 1 { // bootstrap without any state?
-		rf.Log.Entries = append(rf.Log.Entries, RaftLog{}) /* 空项 */
+		rf.Log.Entries = append(rf.Log.Entries, RaftLog{Command: "INVALID"}) /* 空项 */
 		rf.Log.LastIncludedIndex = -1
 		rf.Log.LastIncludedTerm = -1
 		rf.CurrentTerm = 0
@@ -76,10 +76,12 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.VotedFor = VotedFor
 		rf.Log = Logs
 		if rf.Log.Entries == nil {
-			log.Printf("eh? log.Entries is nil?\n")
+			// log.Printf("eh? log.Entries is nil?\n")
 			rf.Log.Entries = []RaftLog{}
 		}
+		// if rf.Log.LastIncludedIndex != -1 {
 		rf.commitIndex = rf.Log.LastIncludedIndex
 		rf.lastApplied = rf.Log.LastIncludedIndex
+		// }
 	}
 }

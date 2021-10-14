@@ -1,18 +1,16 @@
 package kvraft
 
 import (
-	// "fmt"
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -40,8 +38,8 @@ type ClientsOpRecord struct {
 }
 
 type NoticeCh struct {
-	ApplyMsgCh       chan *ClientsOpRecord
-	NotLeaderEventCh chan interface{}
+	ApplyMsgCh chan *ClientsOpRecord
+	// NotLeaderEventCh chan interface{}
 }
 
 type ActiveClient struct {
@@ -81,8 +79,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
-	notLeaderEventCh := make(chan interface{}, 1)
-	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
+	// notLeaderEventCh := make(chan interface{}, 1)
+	noticeChs := &NoticeCh{applyMsgCh /* , notLeaderEventCh */}
 	/* 活跃客户端 */
 	if c, ok := kv.ActiveClients[args.ClientId]; !ok {
 		/* 如果不存在该客户端 */
@@ -111,8 +109,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	} else {
 		/* 等待 raft 处理 */
 		select {
-		case <-notLeaderEventCh:
-			reply.Error = ErrWrongLeader
+		// case <-notLeaderEventCh:
+		// reply.Error = ErrWrongLeader
 		case msg := <-applyMsgCh:
 			reply.Error = msg.Error
 			reply.Value = msg.ResultValue
@@ -123,7 +121,8 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DPrintf("KV[%d] will send Get %s Event to C[%d] Seq[%d]", kv.me, reply.Error, args.ClientId, args.Seq)
 	kv.mu.Lock()
 	/* 删除活跃记录 */
-	delete(kv.ActiveClients, args.ClientId)
+	kv.ActiveClients[args.ClientId].NoticeChs = nil
+	// delete(kv.ActiveClients, args.ClientId)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -145,8 +144,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	applyMsgCh := make(chan *ClientsOpRecord, 1)
-	notLeaderEventCh := make(chan interface{}, 1)
-	noticeChs := &NoticeCh{applyMsgCh, notLeaderEventCh}
+	// notLeaderEventCh := make(chan interface{}, 1)
+	noticeChs := &NoticeCh{applyMsgCh /* ,notLeaderEventCh */}
 	/* 活跃客户端 */
 	if c, ok := kv.ActiveClients[args.ClientId]; !ok {
 		/* 如果不存在该客户端 */
@@ -175,8 +174,8 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	} else {
 		/* 等待 raft 处理 */
 		select {
-		case <-notLeaderEventCh:
-			reply.Error = ErrWrongLeader
+		// case <-notLeaderEventCh:
+		// reply.Error = ErrWrongLeader
 		case msg := <-applyMsgCh:
 			reply.Error = msg.Error
 		case <-leaseTimeOut.C:
@@ -186,7 +185,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DPrintf("KV[%d] will send %s %s Event to C[%d] Seq[%d]", kv.me, args.Op, reply.Error, args.ClientId, args.Seq)
 	kv.mu.Lock()
 	/* 删除活跃记录 */
-	delete(kv.ActiveClients, args.ClientId)
+	// delete(kv.ActiveClients, args.ClientId)
+	kv.ActiveClients[args.ClientId].NoticeChs = nil
+
 }
 
 //
@@ -228,13 +229,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-	labgob.Register(raft.RaftLog{})
 	labgob.Register(raft.RaftLogs{})
+	labgob.Register([]raft.RaftLog{})
 
-	kv := new(KVServer)
+	kv := &KVServer{}
 	kv.me = me
 	kv.dead = 0
-	kv.maxraftstate = -1
 	kv.maxraftstate = maxraftstate
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
@@ -244,87 +244,107 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.ClientsOpRecord = make(map[int64]*ClientsOpRecord)
 	kv.ActiveClients = make(map[int64]*ActiveClient)
 
-	go func() {
-		wait_ch := make(chan interface{})
-		kv.rf.RegisterNotLeaderNowCh(wait_ch)
-		for !kv.killed() {
-			DPrintf("KV[%d] wait for NotLeaderEvent", kv.me)
-			<-wait_ch
-			kv.mu.Lock()
-			for _, client := range kv.ActiveClients {
-				go func(client *ActiveClient) {
-					if client.NoticeChs != nil {
-						client.NoticeChs.NotLeaderEventCh <- interface{}(nil)
-					}
-				}(client)
-			}
-			kv.mu.Unlock()
-		}
-	}()
+	// go func() {
+	// 	wait_ch := make(chan interface{})
+	// 	kv.rf.RegisterNotLeaderNowCh(wait_ch)
+	// 	for !kv.killed() {
+	// 		DPrintf("KV[%d] wait for NotLeaderEvent", kv.me)
+	// 		<-wait_ch
+	// 		kv.mu.Lock()
+	// 		for _, client := range kv.ActiveClients {
+	// 			go func(client *ActiveClient) {
+	// 				// if client.NoticeChs != nil {
+	// 				// client.NoticeChs.NotLeaderEventCh <- interface{}(nil)
+	// 				// }
+	// 			}(client)
+	// 		}
+	// 		kv.mu.Unlock()
+	// 	}
+	// }()
 	/* 监听客户端从 applyCh 的提交 */
 	go func() {
 		for msg := range kv.applyCh {
 			DPrintf("KV[%d] applyCh: %+v\n", kv.me, msg)
 			if msg.CommandValid {
-				cmdOp := msg.Command.(Op)
-				switch cmdOp.Op {
-				case "Get":
-					var record *ClientsOpRecord
-					ok := false
-					kv.mu.Lock()
+				switch msg.Command.(type) {
+				case Op:
+					cmdOp := msg.Command.(Op)
+					switch cmdOp.Op {
+					case "Get":
+						var record *ClientsOpRecord
+						ok := false
+						kv.mu.Lock()
 
-					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
-						/* 否则构造记录 */
-						record = &ClientsOpRecord{Op: cmdOp}
-						/* resultValue 和 err */
-						if value, ok := kv.KVTable[cmdOp.Key]; ok {
-							record.ResultValue = value
-							record.Error = OK
+						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
+						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
+						if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
+							/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
+							record = &ClientsOpRecord{Op: cmdOp}
+							/* resultValue 和 err */
+							if value, ok := kv.KVTable[cmdOp.Key]; ok {
+								record.ResultValue = value
+								record.Error = OK
+							} else {
+								record.Error = ErrNoKey
+							}
+							kv.ClientsOpRecord[cmdOp.ClientId] = record
+						} else if ok && record.Op.Seq > cmdOp.Seq {
+							/* 我们需要返回错误：ErrNeedRetry (更新的请求) */
+							record = &ClientsOpRecord{Op: cmdOp, Error: ErrNeedBiggerSeq}
 						} else {
-							record.Error = ErrNoKey
+							// 返回该历史结果
 						}
 
-						kv.ClientsOpRecord[cmdOp.ClientId] = record
-					}
-					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
-						if activeClient.NoticeChs != nil {
-							activeClient.NoticeChs.ApplyMsgCh <- record
+						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+							if activeClient.NoticeChs != nil {
+								activeClient.NoticeChs.ApplyMsgCh <- record
+							}
 						}
-					}
-					/* 使用有缓冲区的 channel，
-					即便是对面没有人接受也是可以接受的 */
-					kv.mu.Unlock()
-				case "Put", "Append":
-					var record *ClientsOpRecord
-					ok := false
-					kv.mu.Lock()
+						/* 使用有缓冲区的 channel，
+						即便是对面没有人接受也是可以接受的 */
+						kv.mu.Unlock()
+					case "Put", "Append":
+						var record *ClientsOpRecord
+						ok := false
+						kv.mu.Lock()
 
-					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-					if record, ok = kv.ClientsOpRecord[cmdOp.ClientId]; !ok || record.Op.Seq != cmdOp.Seq {
-						/* 否则构造记录 */
-						if cmdOp.Op == "Append" {
-							kv.KVTable[cmdOp.Key] += cmdOp.Value
-						} else if cmdOp.Op == "Put" {
-							kv.KVTable[cmdOp.Key] = cmdOp.Value
+						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
+						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
+						if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
+							/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
+							/* resultValue 和 err */
+							if cmdOp.Op == "Append" {
+								kv.KVTable[cmdOp.Key] += cmdOp.Value
+							} else if cmdOp.Op == "Put" {
+								kv.KVTable[cmdOp.Key] = cmdOp.Value
+							}
+							record = &ClientsOpRecord{Op: cmdOp, Error: OK}
+							kv.ClientsOpRecord[cmdOp.ClientId] = record
+						} else if ok && record.Op.Seq > cmdOp.Seq {
+							/* 我们需要返回错误：ErrNeedRetry (更新的请求) */
+							record = &ClientsOpRecord{Op: cmdOp, Error: ErrNeedBiggerSeq}
+						} else {
+							// 返回该历史结果
 						}
-						record = &ClientsOpRecord{
-							Op:    cmdOp,
-							Error: OK,
+						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+							if activeClient.NoticeChs != nil {
+								activeClient.NoticeChs.ApplyMsgCh <- record
+							}
 						}
-						kv.ClientsOpRecord[cmdOp.ClientId] = record
+						kv.mu.Unlock()
+					default:
+						log.Fatalf("KV[%d] applyCh: unknown command\n", kv.me)
 					}
-					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
-						go func() {
-							activeClient.NoticeChs.ApplyMsgCh <- record
-						}()
+				case string:
+					cmdOp := msg.Command.(string)
+					if cmdOp != "INVALID" {
+						log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 					}
-					kv.mu.Unlock()
 				default:
-					log.Fatalf("KV[%d] applyCh: unknown command\n", kv.me)
+					log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 				}
 			} else {
-				log.Fatalf("KV[%d] applyCh: unknown command\n", kv.me)
+				log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 			}
 		}
 	}()
