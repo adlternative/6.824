@@ -46,9 +46,7 @@ func (rf *Raft) persistStateAndSnapShot(snapshot []byte) {
 	rf.persister.SaveStateAndSnapshot(data, snapshot)
 }
 
-//
 // 恢复之前持久化的状态。
-//WWW
 func (rf *Raft) readPersist(data []byte) {
 	defer func() {
 		log.Printf("S[%03d] [INIT] log=%+v CurrentTerm=%v VotedFor=%v\n", rf.me, rf.Log, rf.CurrentTerm, rf.VotedFor)
@@ -60,8 +58,6 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.Log.LastIncludedTerm = -1
 		rf.CurrentTerm = 0
 		rf.VotedFor = -1
-		rf.haveInit = true
-		rf.InitWaitGroup.Done()
 		return
 	}
 
@@ -76,35 +72,14 @@ func (rf *Raft) readPersist(data []byte) {
 		(d.Decode(&Logs) != nil) {
 		log.Fatalf("failed to readPersist")
 	} else {
+		rf.CurrentTerm = CurrentTerm
+		rf.VotedFor = VotedFor
 		rf.Log = Logs
-		lastIncludedTerm := rf.Log.LastIncludedTerm
-		lastIncludedIndex := rf.Log.LastIncludedIndex
-
-		rf.Log.LastIncludedTerm = -1
-		rf.Log.LastIncludedIndex = -1
-
 		if rf.Log.Entries == nil {
 			log.Printf("eh? log.Entries is nil?\n")
 			rf.Log.Entries = []RaftLog{}
 		}
-		rf.CurrentTerm = CurrentTerm
-		rf.VotedFor = VotedFor
-
-		rf.mu.Lock()
-		/* 如果我们有快照的话？ */
-		if lastIncludedIndex != -1 {
-			msg := &ApplyMsg{
-				CommandValid:  false,
-				SnapshotValid: true,
-				Snapshot:      rf.persister.ReadSnapshot(),
-				SnapshotTerm:  lastIncludedTerm,
-				SnapshotIndex: lastIncludedIndex,
-			}
-			go func() { rf.applyCh <- *msg }()
-		} else {
-			rf.InitWaitGroup.Done()
-			rf.haveInit = true
-		}
-		rf.mu.Unlock()
+		rf.commitIndex = rf.Log.LastIncludedIndex
+		rf.lastApplied = rf.Log.LastIncludedIndex
 	}
 }

@@ -75,7 +75,6 @@ func (rf *Raft) HandleInstallSnapshot(i int, oldTerm int, oldState State,
 
 /* InstallSnapshot  */
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
-	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.DebugWithLock("GET T[%d] S[%d] IS args:%#v", args.Term, args.LeaderId, args)
@@ -140,44 +139,35 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	rf.DebugWithLock("CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
 
-	if rf.haveInit {
-		/* 如果有新的提交日志则不安装本次的快照 */
-		if lastIncludedIndex < 0 {
-			rf.FatalWithLock("[BUG] CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
-			return false
-		} else if lastIncludedIndex <= rf.Log.LastIncludedIndex {
-			rf.DebugWithLock("[reject IS] lastIncludedIndex=%d <= rf.log.LastIncludedIndex=%d 本次的快照不够新", lastIncludedIndex, rf.Log.LastIncludedIndex)
-			// rf.snapShotMayMatchIndex = rf.Log.LastIncludedIndex
-			return false
-		} else if lastIncludedIndex <= rf.commitIndex {
-			rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
-			// rf.snapShotMayMatchIndex = rf.commitIndex
-			return false
-		} else if lastIncludedIndex < rf.Log.Len() &&
-			lastIncludedTerm == rf.Log.TermOf(lastIncludedIndex) {
-			/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
-			则保留其后的日志条目并进行回复*/
-			rf.DebugWithLock("[reject IS] follower seems have more log than this snapshot. lastIncludedIndex=%d rf.log.Len()=%d", lastIncludedTerm, rf.Log.Len())
-			// rf.snapShotMayMatchIndex = lastIncludedIndex
-			return false
-		}
-		/* 持久化快照 */
-		rf.Log.LastIncludedIndex = lastIncludedIndex
-		rf.Log.LastIncludedTerm = lastIncludedTerm
-		rf.Log.Entries = rf.Log.Entries[:0]
-
-		rf.commitIndex = lastIncludedIndex
-		rf.lastApplied = lastIncludedIndex
-
-		rf.persistStateAndSnapShot(snapshot)
-	} else {
-		rf.Log.LastIncludedIndex = lastIncludedIndex
-		rf.Log.LastIncludedTerm = lastIncludedTerm
-		rf.commitIndex = lastIncludedIndex
-		rf.lastApplied = lastIncludedIndex
-		rf.haveInit = true
-		rf.InitWaitGroup.Done()
+	/* 如果有新的提交日志则不安装本次的快照 */
+	if lastIncludedIndex < 0 {
+		rf.FatalWithLock("[BUG] CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
+		return false
+	} else if lastIncludedIndex <= rf.Log.LastIncludedIndex {
+		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d <= rf.log.LastIncludedIndex=%d 本次的快照不够新", lastIncludedIndex, rf.Log.LastIncludedIndex)
+		// rf.snapShotMayMatchIndex = rf.Log.LastIncludedIndex
+		return false
+	} else if lastIncludedIndex <= rf.commitIndex {
+		rf.DebugWithLock("[reject IS] lastIncludedIndex=%d < rf.commitIndex=%d 如果有新的提交日志则不安装本次的快照", lastIncludedIndex, rf.commitIndex)
+		// rf.snapShotMayMatchIndex = rf.commitIndex
+		return false
+	} else if lastIncludedIndex < rf.Log.Len() &&
+		lastIncludedTerm == rf.Log.TermOf(lastIncludedIndex) {
+		/* 如果现存的日志条目与快照中最后包含的日志条目具有相同的索引值和任期号，
+		则保留其后的日志条目并进行回复*/
+		rf.DebugWithLock("[reject IS] follower seems have more log than this snapshot. lastIncludedIndex=%d rf.log.Len()=%d", lastIncludedTerm, rf.Log.Len())
+		// rf.snapShotMayMatchIndex = lastIncludedIndex
+		return false
 	}
+	/* 持久化快照 */
+	rf.Log.LastIncludedIndex = lastIncludedIndex
+	rf.Log.LastIncludedTerm = lastIncludedTerm
+	rf.Log.Entries = rf.Log.Entries[:0]
+
+	rf.commitIndex = lastIncludedIndex
+	rf.lastApplied = lastIncludedIndex
+
+	rf.persistStateAndSnapShot(snapshot)
 	return true
 }
 

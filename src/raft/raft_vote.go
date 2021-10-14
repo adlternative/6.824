@@ -34,7 +34,6 @@ type RequestVoteReply struct {
 // heartsbeats recently.
 
 func (rf *Raft) ticker() {
-	rf.InitWaitGroup.Wait()
 
 	timeout := time.NewTimer(rf.VoteTimeOut)
 	defer timeout.Stop()
@@ -152,7 +151,6 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 //
 /* 接收的服务器上处理 RequestVoteRPC  */
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	/* 设置返回任期 */

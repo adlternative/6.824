@@ -159,7 +159,6 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	/* 等待初始化? */
-	rf.InitWaitGroup.Wait()
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	log.Printf("S[%d] [RECV]", rf.me)
@@ -334,8 +333,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
-	rf.InitWaitGroup.Wait()
-
 	for !rf.killed() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()
