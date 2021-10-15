@@ -11,7 +11,7 @@ import (
 	"6.824/raft"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -40,11 +40,11 @@ type ClientsOpRecord struct {
 
 type NoticeCh struct {
 	ApplyMsgCh chan *ClientsOpRecord
-	// NotLeaderEventCh chan interface{}
 }
 
 type ActiveClient struct {
 	ClientId  int64
+	Seq       int32
 	NoticeChs *NoticeCh
 }
 
@@ -87,6 +87,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		/* 如果不存在该客户端 */
 		client := &ActiveClient{
 			ClientId:  args.ClientId,
+			Seq:       args.Seq,
 			NoticeChs: noticeChs,
 		}
 		kv.ActiveClients[args.ClientId] = client
@@ -95,6 +96,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		此时这个rpc超时会直接返回，那咱就不多余处理了 */
 		// if c.NoticeChs != nil {
 		// }
+		c.Seq = args.Seq
 		c.NoticeChs = noticeChs
 	}
 
@@ -148,10 +150,12 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		/* 如果不存在该客户端 */
 		client := &ActiveClient{
 			ClientId:  args.ClientId,
+			Seq:       args.Seq,
 			NoticeChs: noticeChs,
 		}
 		kv.ActiveClients[args.ClientId] = client
 	} else {
+		c.Seq = args.Seq
 		c.NoticeChs = noticeChs
 	}
 
@@ -232,23 +236,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.ClientsOpRecord = make(map[int64]*ClientsOpRecord)
 	kv.ActiveClients = make(map[int64]*ActiveClient)
 
-	// go func() {
-	// 	wait_ch := make(chan interface{})
-	// 	kv.rf.RegisterNotLeaderNowCh(wait_ch)
-	// 	for !kv.killed() {
-	// 		DPrintf("KV[%d] wait for NotLeaderEvent", kv.me)
-	// 		<-wait_ch
-	// 		kv.mu.Lock()
-	// 		for _, client := range kv.ActiveClients {
-	// 			go func(client *ActiveClient) {
-	// 				// if client.NoticeChs != nil {
-	// 				// client.NoticeChs.NotLeaderEventCh <- interface{}(nil)
-	// 				// }
-	// 			}(client)
-	// 		}
-	// 		kv.mu.Unlock()
-	// 	}
-	// }()
 	/* 监听客户端从 applyCh 的提交 */
 	go func() {
 		for msg := range kv.applyCh {
@@ -265,7 +252,17 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
 						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
-						if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
+						if ok && record.Op.Seq > cmdOp.Seq {
+							/* 旧操作已经处理 */
+							record = &ClientsOpRecord{Op: cmdOp}
+							/* resultValue 和 err */
+							if value, ok := kv.KVTable[cmdOp.Key]; ok {
+								record.ResultValue = value
+								record.Error = OK
+							} else {
+								record.Error = ErrNoKey
+							}
+						} else if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
 							/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
 							record = &ClientsOpRecord{Op: cmdOp}
 							/* resultValue 和 err */
@@ -276,21 +273,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 								record.Error = ErrNoKey
 							}
 							kv.ClientsOpRecord[cmdOp.ClientId] = record
-						} else if ok && record.Op.Seq > cmdOp.Seq {
-							/* 我们需要返回错误：ErrNeedRetry (更新的请求) */
-							record = &ClientsOpRecord{Op: cmdOp, Error: ErrNeedBiggerSeq}
-						} else {
-							// 返回该历史结果
 						}
 
-						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
+							activeClient.Seq == cmdOp.Seq {
 							if activeClient.NoticeChs != nil {
 								activeClient.NoticeChs.ApplyMsgCh <- record
 								activeClient.NoticeChs = nil
 							}
 						}
-						/* 使用有缓冲区的 channel，
-						即便是对面没有人接受也是可以接受的 */
 						kv.mu.Unlock()
 					case "Put", "Append":
 						var record *ClientsOpRecord
@@ -299,9 +290,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
 						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
-						if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
-							/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
-							/* resultValue 和 err */
+						if ok && record.Op.Seq > cmdOp.Seq {
+							/* 旧操作已经处理 */
+							record = &ClientsOpRecord{Op: cmdOp, Error: OK}
+						} else if (ok && record.Op.Seq < cmdOp.Seq) || !ok {
+							/* 构造新记录 */
 							if cmdOp.Op == "Append" {
 								kv.KVTable[cmdOp.Key] += cmdOp.Value
 							} else if cmdOp.Op == "Put" {
@@ -309,13 +302,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 							}
 							record = &ClientsOpRecord{Op: cmdOp, Error: OK}
 							kv.ClientsOpRecord[cmdOp.ClientId] = record
-						} else if ok && record.Op.Seq > cmdOp.Seq {
-							/* 我们需要返回错误：ErrNeedRetry (更新的请求) */
-							record = &ClientsOpRecord{Op: cmdOp, Error: ErrNeedBiggerSeq}
-						} else {
-							// 返回该历史结果
 						}
-						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
+						/* 如果有该活跃客户端，并且等待的请求号和
+						我们当前提交的请求号相同 */
+						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
+							activeClient.Seq == cmdOp.Seq {
 							if activeClient.NoticeChs != nil {
 								activeClient.NoticeChs.ApplyMsgCh <- record
 								activeClient.NoticeChs = nil

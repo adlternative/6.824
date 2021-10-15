@@ -104,9 +104,6 @@ func (ck *Clerk) handleGetReply(args *GetArgs, reply *GetReply) (string, error) 
 		/* retry */
 	case ErrNoKey:
 		return "", nil
-	case ErrNeedBiggerSeq:
-		args.Seq = atomic.AddInt32(&ck.cmdSeq, 1)
-		return "", fmt.Errorf("%v", reply.Error)
 	case OK:
 		return reply.Value, nil
 	default:
@@ -175,9 +172,6 @@ func (ck *Clerk) handlePutAppendReply(args *PutAppendArgs, reply *PutAppendReply
 		return fmt.Errorf("%v", reply.Error)
 	case OK:
 		return nil
-	case ErrNeedBiggerSeq:
-		args.Seq = atomic.AddInt32(&ck.cmdSeq, 1)
-		return fmt.Errorf("%v", reply.Error)
 	default:
 		return fmt.Errorf("unknown error")
 	}
