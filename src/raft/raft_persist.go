@@ -49,7 +49,8 @@ func (rf *Raft) persistStateAndSnapShot(snapshot []byte) {
 // 恢复之前持久化的状态。
 func (rf *Raft) readPersist(data []byte) {
 	defer func() {
-		log.Printf("S[%03d] [INIT] log=%+v CurrentTerm=%v VotedFor=%v\n", rf.me, rf.Log, rf.CurrentTerm, rf.VotedFor)
+		log.Printf("S[%03d] [INIT] len(log)=%+v CurrentTerm=%v VotedFor=%v\n",
+			rf.me, rf.Log.Len(), rf.CurrentTerm, rf.VotedFor)
 	}()
 
 	if data == nil || len(data) < 1 { // bootstrap without any state?
@@ -76,12 +77,9 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.VotedFor = VotedFor
 		rf.Log = Logs
 		if rf.Log.Entries == nil {
-			// log.Printf("eh? log.Entries is nil?\n")
-			rf.Log.Entries = []RaftLog{}
+			rf.Log.Entries = make([]RaftLog, 0)
 		}
-		// if rf.Log.LastIncludedIndex != -1 {
 		rf.commitIndex = rf.Log.LastIncludedIndex
 		rf.lastApplied = rf.Log.LastIncludedIndex
-		// }
 	}
 }

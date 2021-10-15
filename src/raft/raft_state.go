@@ -67,9 +67,6 @@ func (rf *Raft) ResetToFollowerWithLock(reason string) {
 	switch rf.state {
 	case Leader:
 		rf.DebugWithLock("LEADER --> FOLLOWER!")
-		for _, ch := range rf.registerNotLeaderNowCh {
-			ch <- interface{}(nil)
-		}
 	case Candidate:
 		rf.DebugWithLock("CANDIDATE --> FOLLOWER!")
 	case Follower:
@@ -99,8 +96,3 @@ func (rf *Raft) TurnToLeaderWithLock() {
 	go rf.HeartBeatTicker()
 }
 
-func (rf *Raft) RegisterNotLeaderNowCh(ch chan<- interface{}) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	rf.registerNotLeaderNowCh = append(rf.registerNotLeaderNowCh, ch)
-}

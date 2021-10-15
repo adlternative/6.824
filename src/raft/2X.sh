@@ -1,7 +1,7 @@
 ##
 ## ./2X.sh [A|B|C|D] <test> count
-##  E.G. ./2X.sh B TestFailNoAgree2B 3
-##  E.G. ./2X.sh B ALL 50
+##  E.G. ./2X.sh B TestFailNoAgree2B 3 .
+##  E.G. ./2X.sh B ALL 50 .
 ##
 
 if [ "$4" == "GODEBUG" ]; then

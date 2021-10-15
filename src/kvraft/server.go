@@ -1,16 +1,17 @@
 package kvraft
 
 import (
-	"6.824/labgob"
-	"6.824/labrpc"
-	"6.824/raft"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+	"6.824/raft"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -63,11 +64,11 @@ type KVServer struct {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 	/* 如果保留的客户最后一条记录 seq  和当前rpc相同，则直接返回记录值 */
 	if record, ok := kv.ClientsOpRecord[args.ClientId]; ok && record.Op.Seq == args.Seq {
 		reply.Error = record.Error
 		reply.Value = record.ResultValue
+		kv.mu.Unlock()
 		return
 	}
 
@@ -98,7 +99,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 
 	/* 开启定时器（租约） */
-	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	leaseTimeOut := time.NewTimer(raft.VoteTimeOutBase * time.Millisecond)
 	defer leaseTimeOut.Stop()
 	/* 添加命令到 raft 日志中 */
 	_, _, isLeader := kv.rf.Start(op)
@@ -119,19 +120,15 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 	}
 	DPrintf("KV[%d] will send Get %s Event to C[%d] Seq[%d]", kv.me, reply.Error, args.ClientId, args.Seq)
-	kv.mu.Lock()
-	/* 删除活跃记录 */
-	kv.ActiveClients[args.ClientId].NoticeChs = nil
-	// delete(kv.ActiveClients, args.ClientId)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Lock()
-	defer kv.mu.Unlock()
 
 	/* 如果保留的客户最后一条记录 seq  和当前rpc相同，则直接返回记录值 */
 	if record, ok := kv.ClientsOpRecord[args.ClientId]; ok && record.Op.Seq == args.Seq {
 		reply.Error = record.Error
+		kv.mu.Unlock()
 		return
 	}
 
@@ -155,15 +152,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 		kv.ActiveClients[args.ClientId] = client
 	} else {
-		/* 由于这里不允许单个客户端发送多个请求rpc，
-		此时这个rpc超时会直接返回，那咱就不多余处理了 */
-		// if c.NoticeChs != nil {
-		// }
 		c.NoticeChs = noticeChs
 	}
 
 	/* 开启定时器（租约） */
-	leaseTimeOut := time.NewTimer(kv.rf.VoteTimeOut)
+	leaseTimeOut := time.NewTimer(raft.VoteTimeOutBase)
 	defer leaseTimeOut.Stop()
 	/* 添加命令到 raft 日志中 */
 	_, _, isLeader := kv.rf.Start(op)
@@ -183,11 +176,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 	}
 	DPrintf("KV[%d] will send %s %s Event to C[%d] Seq[%d]", kv.me, args.Op, reply.Error, args.ClientId, args.Seq)
-	kv.mu.Lock()
-	/* 删除活跃记录 */
-	// delete(kv.ActiveClients, args.ClientId)
-	kv.ActiveClients[args.ClientId].NoticeChs = nil
-
 }
 
 //
@@ -298,6 +286,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
 							if activeClient.NoticeChs != nil {
 								activeClient.NoticeChs.ApplyMsgCh <- record
+								activeClient.NoticeChs = nil
 							}
 						}
 						/* 使用有缓冲区的 channel，
@@ -329,6 +318,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok {
 							if activeClient.NoticeChs != nil {
 								activeClient.NoticeChs.ApplyMsgCh <- record
+								activeClient.NoticeChs = nil
 							}
 						}
 						kv.mu.Unlock()

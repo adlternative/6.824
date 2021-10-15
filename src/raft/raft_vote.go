@@ -3,9 +3,6 @@ package raft
 import (
 	"fmt"
 	"math/rand"
-
-	// "runtime"
-	"sync/atomic"
 	"time"
 )
 
@@ -44,12 +41,12 @@ func (rf *Raft) ticker() {
 		case <-rf.resetTimerCh:
 			// rf.Debug("ticker: reset the timer")
 			// /* 如果 当前领导者发 参选者 ---> 跟随者 */
-			timeout.Reset(time.Duration(rand.Int63n(500)+500) * time.Millisecond)
+			timeout.Reset(time.Duration(rand.Int63n(VoteTimeOutBase)+VoteTimeOutDelta) * time.Millisecond)
 			/* 关闭计时器 */
 		case <-timeout.C:
 			/* 如果计时器超时 ，执行超时回调 */
 			// rf.Debug("ticker: timeout ")
-			timeout.Reset(time.Duration(rand.Int63n(500)+500) * time.Millisecond)
+			timeout.Reset(time.Duration(rand.Int63n(VoteTimeOutBase)+VoteTimeOutDelta) * time.Millisecond)
 			/* 如果当前节点是领导者 */
 			go rf.VoteTimeOutCallBack()
 		}
@@ -82,8 +79,6 @@ func (rf *Raft) VoteTimeOutCallBack( /* voteCh <-chan bool */ ) {
 		}
 
 		go func(i int) {
-			atomic.AddInt32(&rf.routineCnt, 1)
-			defer atomic.AddInt32(&rf.routineCnt, -1)
 
 			rf.mu.Lock()
 			/* 选举状态已经发生改变 */

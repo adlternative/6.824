@@ -127,6 +127,7 @@ type Raft struct {
 	CurrentTerm int      // 服务器已知最新的任期
 	VotedFor    int      /* 当前任期内收到选票的候选者id 如果没有投给任何候选者 则为空 */
 	Log         RaftLogs /* 日志条目 <command,term> + index */
+
 	/* 持久化层 */
 	persister *Persister // Object to hold this peer's persisted state
 
@@ -155,11 +156,12 @@ type Raft struct {
 	// logger               *logger.Logger
 
 	/* 协程数量统计 (之前有时接收端死锁了发送端可能飙到8k 其实应当重试) */
-	routineCnt int32 // 主动开的 go协程数量统计
-
-	/* 向外提供订阅的 ch,如果从 leader -> follower */
-	registerNotLeaderNowCh []chan<- interface{}
 }
+
+const (
+	VoteTimeOutBase  = 300
+	VoteTimeOutDelta = 300
+)
 
 //
 // the service or tester wants to create a Raft server. the ports
@@ -180,23 +182,20 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.state = Follower
+	rf.applyCh = applyCh
+	rf.nextIndex = make([]int, len(peers))
+	rf.matchIndex = make([]int, len(peers))
+	rf.signalApplyCh = make(chan interface{})
 	rf.resetTimerCh = make(chan interface{})
 	rf.signalHeartBeatTickerCh = make(chan interface{})
 	rf.SendHeartBeatTimeOut = 100 * time.Millisecond
-	rf.VoteTimeOut = time.Duration(rand.Int63n(500)+500) * time.Millisecond
-	// initialize from state persisted before a crash
-	rf.registerNotLeaderNowCh = []chan<- interface{}{}
-	rf.nextIndex = make([]int, len(peers))
-	rf.matchIndex = make([]int, len(peers))
-	rf.applyCh = applyCh
-	rf.signalApplyCh = make(chan interface{})
+	rf.VoteTimeOut = time.Duration(rand.Int63n(VoteTimeOutBase)+VoteTimeOutDelta) * time.Millisecond
 
 	/* 恢复日志 */
 	rf.readPersist(rf.persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-	// go rf.RoutineCntDebug(2)
 	/* 恢复快照 以及 apply */
 	go rf.ApplyCommittedMsgs()
 	return rf

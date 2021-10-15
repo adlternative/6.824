@@ -3,13 +3,12 @@ package raft
 import (
 	"context"
 	"fmt"
-	// "log"
 	"time"
 )
 
 const (
-	OK        = iota
-	ErrOldRPC = iota
+	OK = iota
+	ErrOldRPC
 	ErrSnapshotMismatch
 	ErrLogMismatch
 	ErrTermTooSmall
