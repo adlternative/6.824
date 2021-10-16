@@ -300,7 +300,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		/* 还应该 log apply to state machine */
 		if rf.commitIndex > rf.lastApplied {
 			rf.DebugWithLock("can apply logs")
-			go func() { rf.signalApplyCh <- interface{}(nil) }()
+			go func() { rf.signalApplyCh <- struct{}{} }()
 		}
 		reply.Success = true
 		reply.MayMatchIndex = rf.Log.Len() - 1
@@ -312,24 +312,24 @@ func (rf *Raft) ApplyCommittedMsgs() {
 	for !rf.killed() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()
-		rf.DebugWithLock("can apply logs wit lock")
-		for rf.lastApplied+1 <= rf.commitIndex {
-			if rf.lastApplied+1 <= rf.Log.LastIncludedIndex {
-				rf.FatalWithLock("[BUG] i=%v rf.log=%+v", rf.lastApplied, rf.Log)
-				break
-			}
-			msg := ApplyMsg{
+		msgs := []ApplyMsg{}
+		i := rf.lastApplied + 1
+		for i <= rf.commitIndex {
+			msgs = append(msgs, ApplyMsg{
 				CommandValid:  true,
-				Command:       rf.Log.at(rf.lastApplied + 1).Command,
-				CommandIndex:  rf.lastApplied + 1,
+				Command:       rf.Log.at(i).Command,
+				CommandIndex:  i,
 				SnapshotValid: false,
-			}
-			rf.DebugWithLock("apply msg:%+v", msg)
-			rf.lastApplied++
-			rf.mu.Unlock()
-			rf.applyCh <- msg
-			rf.mu.Lock()
+			})
+			i++
 		}
+		rf.mu.Unlock()
+		for i := 0; i < len(msgs); i++ {
+			// rf.DebugWithLock("apply msg:%+v", msgs[i])
+			rf.applyCh <- msgs[i]
+		}
+		rf.mu.Lock()
+		rf.lastApplied += len(msgs)
 		rf.mu.Unlock()
 	}
 }
@@ -392,7 +392,7 @@ func (rf *Raft) HandleApplyEntries(i int, oldTerm int, oldState State,
 				/* leader 可以应用日志了 */
 				if rf.commitIndex > rf.lastApplied {
 					rf.DebugWithLock("can apply logs")
-					go func() { rf.signalApplyCh <- interface{}(nil) }()
+					go func() { rf.signalApplyCh <- struct{}{} }()
 				}
 			}
 		}

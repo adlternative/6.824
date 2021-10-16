@@ -4,7 +4,7 @@ import (
 	"6.824/labrpc"
 	"crypto/rand"
 	"fmt"
-	"log"
+	_ "log"
 	"math/big"
 	"sync/atomic"
 	"time"
@@ -50,7 +50,7 @@ func (ck *Clerk) Get(key string) string {
 	begin := time.Now()
 	defer func() {
 		end := time.Now()
-		log.Printf("C[%d] Get %dms", ck.clientId, (end.Sub(begin)).Milliseconds())
+		DPrintf("C[%d] Get %dms", ck.clientId, (end.Sub(begin)).Milliseconds())
 	}()
 	args := &GetArgs{
 		Key:      key,
@@ -82,16 +82,16 @@ func (ck *Clerk) Get(key string) string {
 		ck.curServer = i
 
 		if ok := ck.servers[i].Call("KVServer.Get", args, reply); !ok {
-			log.Printf("C[%d] Get Call failed", ck.clientId)
+			// log.Printf("C[%d] Get Call failed", ck.clientId)
 			continue
 		}
 
 		if val, err := ck.handleGetReply(args, reply); err != nil {
-			log.Printf("C[%d] Get error:%s", ck.clientId, err)
+			// log.Printf("C[%d] Get error:%s", ck.clientId, err)
 			continue
 		} else {
-			DPrintf("C[%d] Get ok!", ck.clientId)
-			DPrintf("C[%d] Get v:%v", ck.clientId, val)
+			// DPrintf("C[%d] Get ok!", ck.clientId)
+			// DPrintf("C[%d] Get v:%v", ck.clientId, val)
 			return val
 		}
 	}
@@ -115,7 +115,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	begin := time.Now()
 	defer func() {
 		end := time.Now()
-		log.Printf("C[%d] %s %dms", ck.clientId, op, (end.Sub(begin)).Milliseconds())
+		DPrintf("C[%d] %s %dms", ck.clientId, op, (end.Sub(begin)).Milliseconds())
 	}()
 	args := &PutAppendArgs{
 		Key:      key,

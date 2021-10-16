@@ -142,11 +142,11 @@ type Raft struct {
 	matchIndex []int /* 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增） */
 
 	/* 协程间同步与通信 */
-	mu                      deadlock.Mutex   // Lock to protect shared access to this peer's state
-	applyCh                 chan ApplyMsg    // 用于提交日志条目
-	resetTimerCh            chan interface{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	signalApplyCh           chan interface{} // 用来通知 applyCh 可以提交日志条目了
-	signalHeartBeatTickerCh chan interface{} // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
+	mu                      deadlock.Mutex // Lock to protect shared access to this peer's state
+	applyCh                 chan ApplyMsg  // 用于提交日志条目
+	resetTimerCh            chan struct{}  /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
+	signalApplyCh           chan struct{}  // 用来通知 applyCh 可以提交日志条目了
+	signalHeartBeatTickerCh chan struct{}  // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
 
 	/* 超时管理 */
 	SendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
@@ -185,9 +185,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
-	rf.signalApplyCh = make(chan interface{})
-	rf.resetTimerCh = make(chan interface{})
-	rf.signalHeartBeatTickerCh = make(chan interface{})
+	rf.signalApplyCh = make(chan struct{})
+	rf.resetTimerCh = make(chan struct{})
+	rf.signalHeartBeatTickerCh = make(chan struct{})
 	rf.SendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.VoteTimeOut = time.Duration(rand.Int63n(VoteTimeOutBase)+VoteTimeOutDelta) * time.Millisecond
 
@@ -232,7 +232,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.matchIndex[rf.me] = index
 			rf.persist()
 			/* 非阻塞防止死锁 */
-			go func() { rf.signalHeartBeatTickerCh <- interface{}(nil) }()
+			go func() { rf.signalHeartBeatTickerCh <- struct{}{} }()
 			rf.DebugWithLock("will restart leader HeartBeat")
 		}
 		rf.mu.Unlock()
@@ -263,5 +263,5 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) resetTimer() {
 	rf.DebugWithLock("reset Timer!")
-	go func() { rf.resetTimerCh <- interface{}(nil) }() /* 重置等待选举的超时定时器 */
+	go func() { rf.resetTimerCh <- struct{}{} }() /* 重置等待选举的超时定时器 */
 }
