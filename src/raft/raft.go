@@ -18,12 +18,14 @@ package raft
 //
 
 import (
-	"6.824/labrpc"
 	"fmt"
-	"github.com/sasha-s/go-deadlock"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"6.824/labrpc"
+	"github.com/sasha-s/go-deadlock"
 )
 
 //
@@ -136,6 +138,7 @@ type Raft struct {
 	lastApplied int   //	已经被应用到状态机的最高的日志条目的索引（初始值为0，单调递增）
 	state       State // 不同的服务器身份 L,F,C
 	dead        int32 // set by Kill()
+	init        int
 
 	/* 领导者（服务器）上的易失性状态 (选举后已经重新初始化) */
 	nextIndex  []int /* 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引+1） */
@@ -143,10 +146,11 @@ type Raft struct {
 
 	/* 协程间同步与通信 */
 	mu                      deadlock.Mutex // Lock to protect shared access to this peer's state
-	applyCh                 chan ApplyMsg  // 用于提交日志条目
-	resetTimerCh            chan struct{}  /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
-	signalApplyCh           chan struct{}  // 用来通知 applyCh 可以提交日志条目了
-	signalHeartBeatTickerCh chan struct{}  // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
+	InitCond                *sync.Cond
+	applyCh                 chan ApplyMsg // 用于提交日志条目
+	resetTimerCh            chan struct{} /* 用于在服务器发送 appendEntriesRpc 之后重置选举超时 */
+	signalApplyCh           chan struct{} // 用来通知 applyCh 可以提交日志条目了
+	signalHeartBeatTickerCh chan struct{} // 用来通知 Leader 有新的日志来了 传一个 term 来容许上次当 Leader 时Start 发来而未读取的信号
 
 	/* 超时管理 */
 	SendHeartBeatTimeOut time.Duration // 发送心跳超时时间--用于发送心跳
@@ -188,6 +192,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.signalApplyCh = make(chan struct{})
 	rf.resetTimerCh = make(chan struct{})
 	rf.signalHeartBeatTickerCh = make(chan struct{})
+	rf.InitCond = sync.NewCond(&rf.mu)
 	rf.SendHeartBeatTimeOut = 100 * time.Millisecond
 	rf.VoteTimeOut = time.Duration(rand.Int63n(VoteTimeOutBase)+VoteTimeOutDelta) * time.Millisecond
 
@@ -253,12 +258,19 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 }
 
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
+}
+
+func (rf *Raft) Init() {
+	rf.init = 1
+}
+
+func (rf *Raft) initted() bool {
+	return rf.init == 1
 }
 
 func (rf *Raft) resetTimer() {

@@ -309,6 +309,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 /* 更新 commitIndex */
 func (rf *Raft) ApplyCommittedMsgs() {
+	rf.mu.Lock()
+	if !rf.initted() {
+		rf.InitCond.Wait()
+	}
+	rf.mu.Unlock()
+
 	for !rf.killed() {
 		<-rf.signalApplyCh
 		rf.mu.Lock()

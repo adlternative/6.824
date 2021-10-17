@@ -135,9 +135,17 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// defer rf.snapShotPersistCond.Signal()
 
 	rf.DebugWithLock("CondInstallSnapshot with lastIncludedTerm=%d, lastIncludedIndex=%d", lastIncludedTerm, lastIncludedIndex)
+	if !rf.initted() {
+		rf.Log.LastIncludedIndex = lastIncludedIndex
+		rf.Log.LastIncludedTerm = lastIncludedTerm
+		rf.commitIndex = lastIncludedIndex
+		rf.lastApplied = lastIncludedIndex
+		rf.Init()
+		rf.InitCond.Broadcast()
+		return true
+	}
 
 	/* 如果有新的提交日志则不安装本次的快照 */
 	if lastIncludedIndex < 0 {

@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -11,7 +12,7 @@ import (
 	"6.824/raft"
 )
 
-const Debug = false
+const Debug = true
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -230,104 +231,136 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
 	kv.KVTable = make(map[string]string)
 	/* 暂且不考虑 kv.ClientsOpRecord 的崩溃恢复，因为日志反正都是会重放的， */
 	kv.ClientsOpRecord = make(map[int64]*ClientsOpRecord)
 	kv.ActiveClients = make(map[int64]*ActiveClient)
 
 	/* 监听客户端从 applyCh 的提交 */
-	go func() {
-		for msg := range kv.applyCh {
-			DPrintf("KV[%d] applyCh: %+v\n", kv.me, msg)
-			if msg.CommandValid {
-				switch msg.Command.(type) {
-				case Op:
-					cmdOp := msg.Command.(Op)
-					switch cmdOp.Op {
-					case "Get":
-						var record *ClientsOpRecord
-						ok := false
-						kv.mu.Lock()
+	go kv.apply()
+	return kv
+}
 
-						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
-						if ok && record.Op.Seq > cmdOp.Seq {
-							/* 旧操作已经处理 */
-							record = &ClientsOpRecord{Op: cmdOp}
-							/* resultValue 和 err */
-							if value, ok := kv.KVTable[cmdOp.Key]; ok {
-								record.ResultValue = value
-								record.Error = OK
-							} else {
-								record.Error = ErrNoKey
-							}
-						} else if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
-							/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
-							record = &ClientsOpRecord{Op: cmdOp}
-							/* resultValue 和 err */
-							if value, ok := kv.KVTable[cmdOp.Key]; ok {
-								record.ResultValue = value
-								record.Error = OK
-							} else {
-								record.Error = ErrNoKey
-							}
-							kv.ClientsOpRecord[cmdOp.ClientId] = record
+func (kv *KVServer) apply() {
+	for msg := range kv.applyCh {
+		DPrintf("KV[%d] applyCh: %+v\n", kv.me, msg)
+		if msg.CommandValid {
+			switch msg.Command.(type) {
+			case Op:
+				cmdOp := msg.Command.(Op)
+				switch cmdOp.Op {
+				case "Get":
+					var record *ClientsOpRecord
+					ok := false
+					kv.mu.Lock()
+					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
+					record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
+					if ok && record.Op.Seq > cmdOp.Seq {
+						/* 旧操作已经处理 */
+						record = &ClientsOpRecord{Op: cmdOp}
+						/* resultValue 和 err */
+						if value, ok := kv.KVTable[cmdOp.Key]; ok {
+							record.ResultValue = value
+							record.Error = OK
+						} else {
+							record.Error = ErrNoKey
 						}
-
-						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
-							activeClient.Seq == cmdOp.Seq {
-							if activeClient.NoticeChs != nil {
-								activeClient.NoticeChs.ApplyMsgCh <- record
-								activeClient.NoticeChs = nil
-							}
+					} else if (ok && record.Op.Seq < cmdOp.Seq) || (!ok) {
+						/* 记录中只有更小的序列号,则我们可以构造新记录并替换 */
+						record = &ClientsOpRecord{Op: cmdOp}
+						/* resultValue 和 err */
+						if value, ok := kv.KVTable[cmdOp.Key]; ok {
+							record.ResultValue = value
+							record.Error = OK
+						} else {
+							record.Error = ErrNoKey
 						}
-						kv.mu.Unlock()
-					case "Put", "Append":
-						var record *ClientsOpRecord
-						ok := false
-						kv.mu.Lock()
-
-						/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
-						record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
-						if ok && record.Op.Seq > cmdOp.Seq {
-							/* 旧操作已经处理 */
-							record = &ClientsOpRecord{Op: cmdOp, Error: OK}
-						} else if (ok && record.Op.Seq < cmdOp.Seq) || !ok {
-							/* 构造新记录 */
-							if cmdOp.Op == "Append" {
-								kv.KVTable[cmdOp.Key] += cmdOp.Value
-							} else if cmdOp.Op == "Put" {
-								kv.KVTable[cmdOp.Key] = cmdOp.Value
-							}
-							record = &ClientsOpRecord{Op: cmdOp, Error: OK}
-							kv.ClientsOpRecord[cmdOp.ClientId] = record
-						}
-						/* 如果有该活跃客户端，并且等待的请求号和
-						我们当前提交的请求号相同 */
-						if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
-							activeClient.Seq == cmdOp.Seq {
-							if activeClient.NoticeChs != nil {
-								activeClient.NoticeChs.ApplyMsgCh <- record
-								activeClient.NoticeChs = nil
-							}
-						}
-						kv.mu.Unlock()
-					default:
-						log.Fatalf("KV[%d] applyCh: unknown command\n", kv.me)
+						kv.ClientsOpRecord[cmdOp.ClientId] = record
 					}
-				case string:
-					cmdOp := msg.Command.(string)
-					if cmdOp != "INVALID" {
-						log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
+
+					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
+						activeClient.Seq == cmdOp.Seq {
+						if activeClient.NoticeChs != nil {
+							activeClient.NoticeChs.ApplyMsgCh <- record
+							activeClient.NoticeChs = nil
+						}
 					}
+					if kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate {
+						w := new(bytes.Buffer)
+						e := labgob.NewEncoder(w)
+						if e.Encode(kv.KVTable) != nil ||
+							e.Encode(kv.ClientsOpRecord) != nil {
+							log.Fatalf("KV[%d] applyCh: encode error\n", kv.me)
+						}
+						kv.rf.Snapshot(msg.CommandIndex, w.Bytes())
+					}
+					kv.mu.Unlock()
+				case "Put", "Append":
+					var record *ClientsOpRecord
+					ok := false
+					kv.mu.Lock()
+
+					/* 寻找已经发送的历史记录中是否存在该操作，有则直接返回记录 */
+					record, ok = kv.ClientsOpRecord[cmdOp.ClientId]
+					if ok && record.Op.Seq > cmdOp.Seq {
+						/* 旧操作已经处理 */
+						record = &ClientsOpRecord{Op: cmdOp, Error: OK}
+					} else if (ok && record.Op.Seq < cmdOp.Seq) || !ok {
+						/* 构造新记录 */
+						if cmdOp.Op == "Append" {
+							kv.KVTable[cmdOp.Key] += cmdOp.Value
+						} else if cmdOp.Op == "Put" {
+							kv.KVTable[cmdOp.Key] = cmdOp.Value
+						}
+						record = &ClientsOpRecord{Op: cmdOp, Error: OK}
+						kv.ClientsOpRecord[cmdOp.ClientId] = record
+					}
+					/* 如果有该活跃客户端，并且等待的请求号和
+					我们当前提交的请求号相同 */
+					if activeClient, ok := kv.ActiveClients[cmdOp.ClientId]; ok &&
+						activeClient.Seq == cmdOp.Seq {
+						if activeClient.NoticeChs != nil {
+							activeClient.NoticeChs.ApplyMsgCh <- record
+							activeClient.NoticeChs = nil
+						}
+					}
+
+					if kv.maxraftstate != -1 && kv.rf.RaftStateSize() > kv.maxraftstate {
+						w := new(bytes.Buffer)
+						e := labgob.NewEncoder(w)
+						if e.Encode(kv.KVTable) != nil ||
+							e.Encode(kv.ClientsOpRecord) != nil {
+							log.Fatalf("KV[%d] applyCh: encode error\n", kv.me)
+						}
+						kv.rf.Snapshot(msg.CommandIndex, w.Bytes())
+					}
+					kv.mu.Unlock()
 				default:
+					log.Fatalf("KV[%d] applyCh: unknown command\n", kv.me)
+				}
+			case string:
+				cmdOp := msg.Command.(string)
+				if cmdOp != "INVALID" {
 					log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 				}
-			} else {
+			default:
 				log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 			}
+		} else if msg.SnapshotValid {
+			DPrintf("KV[%d] Installsnapshot %v\n", kv.me, msg.SnapshotIndex)
+			kv.mu.Lock()
+			if kv.rf.CondInstallSnapshot(msg.SnapshotTerm,
+				msg.SnapshotIndex, msg.Snapshot) {
+				r := bytes.NewBuffer(msg.Snapshot)
+				d := labgob.NewDecoder(r)
+				if d.Decode(&kv.KVTable) != nil ||
+					d.Decode(&kv.ClientsOpRecord) != nil {
+					log.Fatalf("KV[%d] Installsnapshot: decode error\n", kv.me)
+				}
+			}
+			kv.mu.Unlock()
+		} else {
+			log.Fatalf("KV[%d] applyCh: unknown command %v\n", kv.me, msg.Command)
 		}
-	}()
-	return kv
+	}
 }

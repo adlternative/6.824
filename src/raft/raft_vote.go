@@ -31,6 +31,11 @@ type RequestVoteReply struct {
 // heartsbeats recently.
 
 func (rf *Raft) ticker() {
+	rf.mu.Lock()
+	if !rf.initted() {
+		rf.InitCond.Wait()
+	}
+	rf.mu.Unlock()
 
 	timeout := time.NewTimer(rf.VoteTimeOut)
 	defer timeout.Stop()

@@ -41,6 +41,10 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data)
 }
 
+func (rf *Raft) RaftStateSize() int {
+	return rf.persister.RaftStateSize()
+}
+
 func (rf *Raft) persistStateAndSnapShot(snapshot []byte) {
 	data := rf.stateEncode()
 	rf.persister.SaveStateAndSnapshot(data, snapshot)
@@ -59,6 +63,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.Log.LastIncludedTerm = -1
 		rf.CurrentTerm = 0
 		rf.VotedFor = -1
+		rf.Init()
 		return
 	}
 
@@ -75,11 +80,33 @@ func (rf *Raft) readPersist(data []byte) {
 	} else {
 		rf.CurrentTerm = CurrentTerm
 		rf.VotedFor = VotedFor
-		rf.Log = Logs
-		if rf.Log.Entries == nil {
+		rf.commitIndex = -1
+		rf.lastApplied = -1
+		if Logs.Entries == nil {
 			rf.Log.Entries = make([]RaftLog, 0)
+		} else {
+			rf.Log.Entries = Logs.Entries
 		}
-		rf.commitIndex = rf.Log.LastIncludedIndex
-		rf.lastApplied = rf.Log.LastIncludedIndex
+		if Logs.LastIncludedIndex != -1 {
+			rf.ReStoreSnapshot(Logs.LastIncludedIndex, Logs.LastIncludedTerm)
+		} else {
+			rf.Init()
+		}
 	}
+}
+
+func (rf *Raft) ReStoreSnapshot(lastIncludedIndex int, lastIncludedTerm int) {
+	rf.ReadSnapshot(rf.persister.ReadSnapshot(), lastIncludedIndex, lastIncludedTerm)
+}
+
+func (rf *Raft) ReadSnapshot(data []byte, lastIncludedIndex int, lastIncludedTerm int) {
+	rf.mu.Lock()
+	msg := &ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      data,
+		SnapshotIndex: lastIncludedIndex,
+		SnapshotTerm:  lastIncludedTerm,
+	}
+	rf.mu.Unlock()
+	go func() { rf.applyCh <- *msg }()
 }
